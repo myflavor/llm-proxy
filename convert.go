@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -151,8 +152,12 @@ func convertToolChoice(v interface{}) interface{} {
 var hexCounter uint64
 
 func randomHex(n int) string {
-	hexCounter++
-	return fmt.Sprintf("%x%x", time.Now().UnixNano(), hexCounter)[:n]
+	counter := atomic.AddUint64(&hexCounter, 1)
+	result := fmt.Sprintf("%x%x", time.Now().UnixNano(), counter)
+	if len(result) < n {
+		return result
+	}
+	return result[:n]
 }
 
 // --- Token estimation ---

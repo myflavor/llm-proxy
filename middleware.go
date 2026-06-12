@@ -13,12 +13,23 @@ import (
 // responseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
-	status int
+	status        int
+	headerWritten bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
-	rw.status = code
-	rw.ResponseWriter.WriteHeader(code)
+	if !rw.headerWritten {
+		rw.status = code
+		rw.headerWritten = true
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.headerWritten {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(b)
 }
 
 // Flush implements http.Flusher by delegating to the underlying writer.
@@ -70,20 +81,23 @@ func authMiddleware(next http.Handler) http.Handler {
 func logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rw := &responseWriter{ResponseWriter: w, status: 200}
-		func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
+		rw := &responseWriter{ResponseWriter: w, status: 200, headerWritten: false}
+
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
+				// Only write error response if headers haven't been sent yet
+				if !rw.headerWritten {
 					writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
 						"error": map[string]interface{}{"message": fmt.Sprintf("internal error: %v", rec), "type": "server_error"},
 					})
 					rw.status = 500
 				}
-			}()
-			next.ServeHTTP(rw, r)
+			}
+			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
 		}()
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
+
+		next.ServeHTTP(rw, r)
 	})
 }
 
