@@ -1,0 +1,35 @@
+server:
+  api_key: "sk-xin"  # 留空则不需要认证
+
+model_list:
+  # OpenCode Zen free models (OpenAI compatible)
+  - model_name: mimo-v2.5-free
+    litellm_params:
+      model: openai/mimo-v2.5-free
+      api_key: public
+      api_base: https://opencode.ai/zen/v1
+
+  - model_name: north-mini-code-free
+    litellm_params:
+      model: openai/north-mini-code-free
+      api_key: public
+      api_base: https://opencode.ai/zen/v1
+
+  - model_name: nemotron-3-ultra-free
+    litellm_params:
+      model: openai/nemotron-3-ultra-free
+      api_key: public
+      api_base: https://opencode.ai/zen/v1
+
+  - model_name: deepseek-v4-flash-free
+    litellm_params:
+      model: openai/deepseek-v4-flash-free
+      api_key: public
+      api_base: https://opencode.ai/zen/v1
+
+  # MiniMax (Anthropic compatible)
+  - model_name: MiniMax-M3
+    litellm_params:
+      model: anthropic/MiniMax-M3
+      api_key: demo
+      api_base: https://api.minimaxi.com/anthropic
