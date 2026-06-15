@@ -16,6 +16,7 @@ type Config struct {
 
 // ServerConfig holds server-level settings.
 type ServerConfig struct {
+	Port   string `yaml:"port"`    // listen port, default "5000"
 	APIKey string `yaml:"api_key"`
 }
 
@@ -69,6 +70,10 @@ func loadConfig(path string) error {
 	}
 
 	serverAPIKey = cfg.Server.APIKey
+	serverPort = cfg.Server.Port
+	if serverPort == "" {
+		serverPort = "5000"
+	}
 
 	for _, entry := range cfg.ModelList {
 		parts := strings.SplitN(entry.LitellmParams.Model, "/", 2)

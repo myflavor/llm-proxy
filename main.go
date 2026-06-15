@@ -53,9 +53,9 @@ func main() {
 		})
 	})
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "5000"
+	port := serverPort
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		port = envPort
 	}
 
 	srv := &http.Server{

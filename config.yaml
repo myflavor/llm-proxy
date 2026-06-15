@@ -1,4 +1,5 @@
 server:
+  port: "5000"
   api_key: "sk-xin"  # 留空则不需要认证
 
 model_list:
@@ -33,3 +34,22 @@ model_list:
       model: anthropic/MiniMax-M3
       api_key: demo
       api_base: https://api.minimaxi.com/anthropic
+
+  # Gemini via gemini-web2api-go (OpenAI compatible)
+  - model_name: gemini-3.5-flash
+    litellm_params:
+      model: openai/gemini-3.5-flash
+      api_key: anything
+      api_base: http://localhost:8081/v1
+
+  - model_name: gemini-3.5-flash-thinking
+    litellm_params:
+      model: openai/gemini-3.5-flash-thinking
+      api_key: anything
+      api_base: http://localhost:8081/v1
+
+  - model_name: gemini-3.1-pro
+    litellm_params:
+      model: openai/gemini-3.1-pro
+      api_key: anything
+      api_base: http://localhost:8081/v1

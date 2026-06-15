@@ -10,6 +10,7 @@ var (
 	providersByModel = map[string]*Provider{} // model_name → Provider
 	providerList     []*Provider
 	serverAPIKey     string // empty = no auth required
+	serverPort       string // listen port, default "5000"
 )
 
 var httpClient = &http.Client{Timeout: 10 * time.Minute}
