@@ -1,0 +1,83 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Multi-Arch Releases
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            go build -ldflags="-s -w" -o llm-proxy.exe
+          else
+            go build -ldflags="-s -w" -o llm-proxy
+          fi
+
+      - name: Create release package
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip llm-proxy-${{ matrix.goos }}-${{ matrix.goarch }}.zip llm-proxy.exe config.yaml
+          else
+            zip llm-proxy-${{ matrix.goos }}-${{ matrix.goarch }}.zip llm-proxy config.yaml
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: llm-proxy-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
