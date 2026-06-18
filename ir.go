@@ -51,7 +51,8 @@ type IRToolChoice struct {
 
 type IRThinking struct {
 	Enabled      bool
-	BudgetTokens int
+	BudgetTokens int    // Anthropic 旧格式 budget_tokens
+	Effort       string // 统一 effort 等级：none/minimal/low/medium/high/xhigh/max/ultracode
 }
 
 type IRMetadata struct {

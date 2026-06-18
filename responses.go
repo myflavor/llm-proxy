@@ -201,7 +201,7 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 
 	// reasoning
 	if req.Reasoning != nil {
-		ir.Thinking = &IRThinking{Enabled: true}
+		ir.Thinking = &IRThinking{Enabled: true, Effort: req.Reasoning.Effort}
 	}
 
 	// text.format → extensions
@@ -357,6 +357,11 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		}
 	}
 
+	// reasoning_effort
+	if ir.Thinking != nil && ir.Thinking.Effort != "" {
+		oa["reasoning_effort"] = ir.Thinking.Effort
+	}
+
 	return oa
 }
 
@@ -380,6 +385,15 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 	// thinking
 	if req.Thinking != nil && req.Thinking.Type == "enabled" {
 		ir.Thinking = &IRThinking{Enabled: true, BudgetTokens: req.Thinking.BudgetTokens}
+		if req.Thinking.BudgetTokens > 0 && ir.Thinking.Effort == "" {
+			ir.Thinking.Effort = budgetToEffort(req.Thinking.BudgetTokens)
+		}
+	}
+	if req.Effort != "" {
+		if ir.Thinking == nil {
+			ir.Thinking = &IRThinking{Enabled: true}
+		}
+		ir.Thinking.Effort = req.Effort
 	}
 
 	// metadata
@@ -610,7 +624,16 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 
 	// thinking
 	if ir.Thinking != nil && ir.Thinking.Enabled {
-		req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: ir.Thinking.BudgetTokens}
+		if ir.Thinking.Effort != "" {
+			// 新格式：adaptive thinking + effort
+			req.Thinking = &anthropicThinking{Type: "adaptive"}
+			req.Effort = clampEffortForAnthropic(ir.Thinking.Effort)
+		} else if ir.Thinking.BudgetTokens > 0 {
+			// 旧格式：enabled + budget_tokens
+			req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: ir.Thinking.BudgetTokens}
+		} else {
+			req.Thinking = &anthropicThinking{Type: "adaptive"}
+		}
 	}
 
 	// metadata
@@ -642,8 +665,9 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 				Parameters  interface{} `json:"parameters"`
 			} `json:"function"`
 		} `json:"tools,omitempty"`
-		ToolChoice   interface{} `json:"tool_choice,omitempty"`
-		ResponseFormat interface{} `json:"response_format,omitempty"`
+		ToolChoice      interface{} `json:"tool_choice,omitempty"`
+		ResponseFormat  interface{} `json:"response_format,omitempty"`
+		ReasoningEffort string      `json:"reasoning_effort,omitempty"`
 	}
 	if err := json.Unmarshal(body, &oa); err != nil {
 		return nil, err
@@ -752,6 +776,10 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 			}
 		}
 		ir.ToolChoice = tc
+	}
+
+	if oa.ReasoningEffort != "" {
+		ir.Thinking = &IRThinking{Enabled: true, Effort: oa.ReasoningEffort}
 	}
 
 	return ir, nil
@@ -1112,6 +1140,13 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 			req["tool_choice"] = "auto"
 		case "none":
 			req["tool_choice"] = "none"
+		}
+	}
+
+	// reasoning effort
+	if ir.Thinking != nil && ir.Thinking.Effort != "" {
+		req["reasoning"] = map[string]interface{}{
+			"effort": clampEffortForResponses(ir.Thinking.Effort),
 		}
 	}
 

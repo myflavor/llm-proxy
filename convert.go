@@ -23,6 +23,7 @@ type anthropicMsgReq struct {
 	Tools         []anthropicTool    `json:"tools,omitempty"`
 	ToolChoice    interface{}        `json:"tool_choice,omitempty"`
 	Thinking      *anthropicThinking `json:"thinking,omitempty"`
+	Effort        string             `json:"effort,omitempty"` // thinking effort level
 	Metadata      *anthropicMetadata `json:"metadata,omitempty"`
 }
 
@@ -121,6 +122,66 @@ func mapFinishReasonReverse(r string) string {
 		return "tool_calls"
 	}
 	return r
+}
+
+// --- Effort 转换 ---
+
+// budgetToEffort 将 Anthropic 的 budget_tokens 转为 effort 字符串。
+func budgetToEffort(budget int) string {
+	switch {
+	case budget <= 0:
+		return "none"
+	case budget <= 2048:
+		return "low"
+	case budget <= 8192:
+		return "medium"
+	default:
+		return "high"
+	}
+}
+
+// effortToBudget 将 effort 字符串转为 Anthropic 的 budget_tokens。
+func effortToBudget(effort string) int {
+	switch effort {
+	case "none":
+		return 0
+	case "minimal":
+		return 1024
+	case "low":
+		return 2048
+	case "medium":
+		return 8192
+	case "high", "xhigh", "max", "ultracode":
+		return 32768
+	default:
+		return 8192
+	}
+}
+
+// clampEffortForResponses 将 effort 限制在 Responses API 支持范围内。
+func clampEffortForResponses(effort string) string {
+	switch effort {
+	case "none", "minimal", "low", "medium", "high", "xhigh":
+		return effort
+	case "max", "ultracode":
+		return "xhigh"
+	default:
+		return effort
+	}
+}
+
+// clampEffortForAnthropic 将 effort 限制在 Anthropic 支持范围内。
+func clampEffortForAnthropic(effort string) string {
+	switch effort {
+	case "none", "low", "medium", "high":
+		return effort
+	case "minimal":
+		return "low"
+	case "xhigh", "max", "ultracode":
+		return "high"
+	default:
+		return effort
+	}
 }
 
 // --- ID generation ---
