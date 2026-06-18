@@ -123,30 +123,6 @@ func mapFinishReasonReverse(r string) string {
 	return r
 }
 
-func convertToolChoice(v interface{}) interface{} {
-	tc, ok := v.(map[string]interface{})
-	if !ok {
-		return v
-	}
-	switch tc["type"] {
-	case "auto":
-		return "auto"
-	case "any":
-		return "required"
-	case "none":
-		return "none"
-	case "tool":
-		if name, _ := tc["name"].(string); name != "" {
-			return map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{"name": name},
-			}
-		}
-		return "auto"
-	}
-	return "auto"
-}
-
 // --- ID generation ---
 
 var hexCounter uint64

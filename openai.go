@@ -12,165 +12,6 @@ import (
 	"time"
 )
 
-// openaiToAnthropicRequest converts an OpenAI chat request to Anthropic format.
-func openaiToAnthropicRequest(body []byte) (*anthropicMsgReq, error) {
-	var oa struct {
-		Model       string                   `json:"model"`
-		Messages    []map[string]interface{} `json:"messages"`
-		MaxTokens   int                      `json:"max_tokens"`
-		Temperature *float64                 `json:"temperature,omitempty"`
-		TopP        *float64                 `json:"top_p,omitempty"`
-		Stop        []string                 `json:"stop,omitempty"`
-		Stream      bool                     `json:"stream,omitempty"`
-		Tools       []struct {
-			Type     string `json:"type"`
-			Function struct {
-				Name        string      `json:"name"`
-				Description string      `json:"description,omitempty"`
-				Parameters  interface{} `json:"parameters"`
-			} `json:"function"`
-		} `json:"tools,omitempty"`
-		ToolChoice interface{} `json:"tool_choice,omitempty"`
-	}
-	if err := json.Unmarshal(body, &oa); err != nil {
-		return nil, err
-	}
-
-	req := &anthropicMsgReq{
-		Model:         oa.Model,
-		MaxTokens:     oa.MaxTokens,
-		Temperature:   oa.Temperature,
-		TopP:          oa.TopP,
-		StopSequences: oa.Stop,
-		Stream:        oa.Stream,
-	}
-
-	// Convert system messages to Anthropic system field.
-	var systemParts []string
-	var msgs []anthropicMsg
-	for _, m := range oa.Messages {
-		role, _ := m["role"].(string)
-		if role == "system" {
-			systemParts = append(systemParts, extractText(m["content"]))
-			continue
-		}
-		if role == "tool" {
-			toolCallID, _ := m["tool_call_id"].(string)
-			content, _ := m["content"].(string)
-			msgs = append(msgs, anthropicMsg{
-				Role: "user",
-				Content: []interface{}{map[string]interface{}{
-					"type":        "tool_result",
-					"tool_use_id": toolCallID,
-					"content":     content,
-				}},
-			})
-			continue
-		}
-		msgs = append(msgs, anthropicMsg{Role: role, Content: m["content"]})
-	}
-	if len(systemParts) > 0 {
-		req.System = strings.Join(systemParts, "\n\n")
-	}
-	req.Messages = msgs
-
-	// Convert tools.
-	if len(oa.Tools) > 0 {
-		for _, t := range oa.Tools {
-			req.Tools = append(req.Tools, anthropicTool{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				InputSchema: t.Function.Parameters,
-			})
-		}
-	}
-
-	return req, nil
-}
-
-// anthropicResponseToOpenAI converts an Anthropic non-streaming response to OpenAI format.
-func anthropicResponseToOpenAI(body []byte, model string) map[string]interface{} {
-	var anth struct {
-		ID      string `json:"id"`
-		Role    string `json:"role"`
-		Content []struct {
-			Type     string      `json:"type"`
-			Text     string      `json:"text,omitempty"`
-			Thinking string      `json:"thinking,omitempty"`
-			ID       string      `json:"id,omitempty"`
-			Name     string      `json:"name,omitempty"`
-			Input    interface{} `json:"input,omitempty"`
-		} `json:"content"`
-		StopReason string `json:"stop_reason"`
-		Usage      *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &anth); err != nil {
-		var errResp struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		msg := "[upstream response parse error]"
-		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
-			msg = errResp.Error.Message
-		}
-		return map[string]interface{}{
-			"id": "chatcmpl-" + randomHex(12), "object": "chat.completion", "created": time.Now().Unix(),
-			"model": model, "choices": []interface{}{map[string]interface{}{
-				"index": 0, "message": map[string]interface{}{"role": "assistant", "content": msg},
-				"finish_reason": "stop",
-			}},
-		}
-	}
-
-	var content, reasoningContent string
-	var toolCalls []interface{}
-	for _, c := range anth.Content {
-		switch c.Type {
-		case "text":
-			content = c.Text
-		case "thinking":
-			reasoningContent = c.Thinking
-		case "tool_use":
-			inputJSON, _ := json.Marshal(c.Input)
-			toolCalls = append(toolCalls, map[string]interface{}{
-				"id": c.ID, "type": "function",
-				"function": map[string]interface{}{"name": c.Name, "arguments": string(inputJSON)},
-			})
-		}
-	}
-
-	finishReason := mapFinishReasonReverse(anth.StopReason)
-
-	msg := map[string]interface{}{"role": "assistant"}
-	if content != "" {
-		msg["content"] = content
-	}
-	if reasoningContent != "" {
-		msg["reasoning_content"] = reasoningContent
-	}
-	if len(toolCalls) > 0 {
-		msg["tool_calls"] = toolCalls
-	}
-
-	resp := map[string]interface{}{
-		"id": "chatcmpl-" + randomHex(12), "object": "chat.completion", "created": time.Now().Unix(),
-		"model": model, "choices": []interface{}{map[string]interface{}{
-			"index": 0, "message": msg, "finish_reason": finishReason,
-		}},
-	}
-	if anth.Usage != nil {
-		resp["usage"] = map[string]interface{}{
-			"prompt_tokens": anth.Usage.InputTokens, "completion_tokens": anth.Usage.OutputTokens,
-			"total_tokens": anth.Usage.InputTokens + anth.Usage.OutputTokens,
-		}
-	}
-	return resp
-}
-
 // translateAnthropicToOpenAIStream translates Anthropic SSE → OpenAI SSE.
 func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	scanner := bufio.NewScanner(upstream)
@@ -288,7 +129,12 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Model string `json:"model"`
 	}
-	json.Unmarshal(body, &req)
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": map[string]interface{}{"message": "invalid JSON body", "type": "invalid_request_error"},
+		})
+		return
+	}
 
 	p, err := getProvider(req.Model)
 	if err != nil {
@@ -302,22 +148,35 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	case ProviderOpenAI:
 		// Rewrite model name and forward.
 		var m map[string]interface{}
-		json.Unmarshal(body, &m)
+		if err := json.Unmarshal(body, &m); err != nil || m == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]interface{}{"message": "invalid JSON body", "type": "invalid_request_error"},
+			})
+			return
+		}
 		m["model"] = p.Name
 		rewritten, _ := json.Marshal(m)
 		forwardOpenAI(w, r, p, rewritten)
 
 	case ProviderAnthropic:
-		// Convert OpenAI request → Anthropic format.
-		oaReq, err := openaiToAnthropicRequest(body)
+		// Convert OpenAI request → IR → Anthropic format.
+		ir, err := chatCompletionsToIRRequest(body)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"error": map[string]interface{}{"message": err.Error(), "type": "invalid_request_error"},
 			})
 			return
 		}
-		oaReq.Model = p.Name
-		anthBody, _ := json.Marshal(oaReq)
+		ir.Model = p.Name
+		anthReq := irToAnthropicRequest(ir)
+		anthBody, _ := json.Marshal(anthReq)
+		if len(p.ExtraParams) > 0 {
+			var m map[string]interface{}
+			if err := json.Unmarshal(anthBody, &m); err == nil && m != nil {
+				applyExtraParams(m, p.ExtraParams)
+				anthBody, _ = json.Marshal(m)
+			}
+		}
 
 		ctx := r.Context()
 		req2, err := http.NewRequestWithContext(ctx, "POST", p.MessagesURL, bytes.NewReader(anthBody))
@@ -344,7 +203,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if oaReq.Stream {
+		if ir.Stream {
 			flusher, ok := w.(http.Flusher)
 			if !ok {
 				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -363,9 +222,10 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Non-streaming: convert Anthropic response → OpenAI format.
+		// Non-streaming: Anthropic response → IR → OpenAI format.
 		resBody, _ := io.ReadAll(resp.Body)
-		openaiResp := anthropicResponseToOpenAI(resBody, req.Model)
+		irResp := anthropicToIR(resBody, req.Model)
+		openaiResp := irToChatCompletionsResponse(irResp)
 		writeJSON(w, resp.StatusCode, openaiResp)
 	}
 }

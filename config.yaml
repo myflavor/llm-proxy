@@ -1,36 +1,50 @@
 server:
   port: "5000"
-  api_key: "sk-xin"  # 留空则不需要认证
+  api_key: "sk-xin"
 
-model_list:
-  # OpenCode Zen free models (OpenAI compatible)
-  - model_name: mimo-v2.5-free
-    litellm_params:
-      model: openai/mimo-v2.5-free
-      api_key: public
-      api_base: https://opencode.ai/zen/v1
+models:
+  # OpenCode Zen free models
+  - name: mimo-v2.5-free
+    provider: openai
+    model: mimo-v2.5-free
+    api_key: public
+    base_url: https://opencode.ai/zen/v1
 
-  - model_name: north-mini-code-free
-    litellm_params:
-      model: openai/north-mini-code-free
-      api_key: public
-      api_base: https://opencode.ai/zen/v1
+  - name: north-mini-code-free
+    provider: openai
+    model: north-mini-code-free
+    api_key: public
+    base_url: https://opencode.ai/zen/v1
 
-  - model_name: nemotron-3-ultra-free
-    litellm_params:
-      model: openai/nemotron-3-ultra-free
-      api_key: public
-      api_base: https://opencode.ai/zen/v1
+  - name: nemotron-3-ultra-free
+    provider: openai
+    model: nemotron-3-ultra-free
+    api_key: public
+    base_url: https://opencode.ai/zen/v1
 
-  - model_name: deepseek-v4-flash-free
-    litellm_params:
-      model: openai/deepseek-v4-flash-free
-      api_key: public
-      api_base: https://opencode.ai/zen/v1
+  - name: deepseek-v4-flash-free
+    provider: openai
+    model: deepseek-v4-flash-free
+    api_key: public
+    base_url: https://opencode.ai/zen/v1
 
-  # MiniMax (Anthropic compatible)
-  - model_name: MiniMax-M3
-    litellm_params:
-      model: anthropic/MiniMax-M3
-      api_key: demo
-      api_base: https://api.minimaxi.com/anthropic
+  # MiniMax — 三种标准
+  - name: MiniMax-M3-openai
+    provider: openai
+    model: MiniMax-M3
+    api_key: sk-your-minimax-key
+    base_url: https://api.minimaxi.com/v1
+    extra_params:
+      reasoning_split: true
+
+  - name: MiniMax-M3-anthropic
+    provider: anthropic
+    model: MiniMax-M3
+    api_key: sk-your-minimax-key
+    base_url: https://api.minimaxi.com/anthropic
+
+  - name: MiniMax-M3-responses
+    provider: responses
+    model: MiniMax-M3
+    api_key: sk-your-minimax-key
+    base_url: https://api.minimaxi.com/v1

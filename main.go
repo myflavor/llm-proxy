@@ -27,7 +27,7 @@ func main() {
 		log.Printf("auth: disabled (server.api_key is empty)")
 	}
 	for _, p := range providerList {
-		log.Printf("  %s → %s/%s (%s)", p.ModelName, p.Type, p.Name, p.APIBase)
+		log.Printf("  %s → %s/%s (%s)", p.ModelName, p.Type, p.Name, p.BaseURL)
 	}
 
 	mux := http.NewServeMux()
@@ -41,6 +41,8 @@ func main() {
 	mux.HandleFunc("/chat/completions", handleOpenAI)
 	mux.HandleFunc("/v1/messages", handleAnthropic)
 	mux.HandleFunc("/messages", handleAnthropic)
+	mux.HandleFunc("/v1/responses", handleResponses)
+	mux.HandleFunc("/responses", handleResponses)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			setCORS(w)
