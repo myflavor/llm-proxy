@@ -322,7 +322,12 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 					}
 				case "thinking":
 					if txt, _ := b["thinking"].(string); txt != "" {
-						msg.Content = append(msg.Content, IRContentBlock{Type: "thinking", Thinking: txt})
+						sig, _ := b["signature"].(string)
+						msg.Content = append(msg.Content, IRContentBlock{Type: "thinking", Thinking: txt, Signature: sig})
+					}
+				case "redacted_thinking":
+					if data, _ := b["data"].(string); data != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "redacted_thinking", Data: data})
 					}
 				case "tool_use":
 					input, _ := b["input"].(map[string]interface{})
@@ -423,7 +428,13 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 				case "text":
 					blocks = append(blocks, map[string]interface{}{"type": "text", "text": b.Text})
 				case "thinking":
-					blocks = append(blocks, map[string]interface{}{"type": "thinking", "thinking": b.Thinking})
+					block := map[string]interface{}{"type": "thinking", "thinking": b.Thinking}
+					if b.Signature != "" {
+						block["signature"] = b.Signature
+					}
+					blocks = append(blocks, block)
+				case "redacted_thinking":
+					blocks = append(blocks, map[string]interface{}{"type": "redacted_thinking", "data": b.Data})
 				case "tool_use":
 					blocks = append(blocks, map[string]interface{}{
 						"type": "tool_use", "id": b.ToolUseID, "name": b.ToolName, "input": b.ToolInput,
@@ -845,12 +856,14 @@ func anthropicToIR(body []byte, model string) *IRResponse {
 		ID      string `json:"id"`
 		Role    string `json:"role"`
 		Content []struct {
-			Type     string      `json:"type"`
-			Text     string      `json:"text,omitempty"`
-			Thinking string      `json:"thinking,omitempty"`
-			ID       string      `json:"id,omitempty"`
-			Name     string      `json:"name,omitempty"`
-			Input    interface{} `json:"input,omitempty"`
+			Type      string      `json:"type"`
+			Text      string      `json:"text,omitempty"`
+			Thinking  string      `json:"thinking,omitempty"`
+			Signature string      `json:"signature,omitempty"`
+			Data      string      `json:"data,omitempty"`
+			ID        string      `json:"id,omitempty"`
+			Name      string      `json:"name,omitempty"`
+			Input     interface{} `json:"input,omitempty"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      *struct {
@@ -897,7 +910,9 @@ func anthropicToIR(body []byte, model string) *IRResponse {
 		case "text":
 			ir.Content = append(ir.Content, IRContentBlock{Type: "text", Text: c.Text})
 		case "thinking":
-			ir.Content = append(ir.Content, IRContentBlock{Type: "thinking", Thinking: c.Thinking})
+			ir.Content = append(ir.Content, IRContentBlock{Type: "thinking", Thinking: c.Thinking, Signature: c.Signature})
+		case "redacted_thinking":
+			ir.Content = append(ir.Content, IRContentBlock{Type: "redacted_thinking", Data: c.Data})
 		case "tool_use":
 			input, _ := c.Input.(map[string]interface{})
 			ir.Content = append(ir.Content, IRContentBlock{
@@ -929,7 +944,13 @@ func irToAnthropicResponse(ir *IRResponse) map[string]interface{} {
 		case "text":
 			contentBlocks = append(contentBlocks, map[string]interface{}{"type": "text", "text": b.Text})
 		case "thinking":
-			contentBlocks = append(contentBlocks, map[string]interface{}{"type": "thinking", "thinking": b.Thinking})
+			block := map[string]interface{}{"type": "thinking", "thinking": b.Thinking}
+			if b.Signature != "" {
+				block["signature"] = b.Signature
+			}
+			contentBlocks = append(contentBlocks, block)
+		case "redacted_thinking":
+			contentBlocks = append(contentBlocks, map[string]interface{}{"type": "redacted_thinking", "data": b.Data})
 		case "tool_use":
 			contentBlocks = append(contentBlocks, map[string]interface{}{
 				"type": "tool_use", "id": b.ToolUseID, "name": b.ToolName, "input": b.ToolInput,

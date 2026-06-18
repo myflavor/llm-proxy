@@ -120,6 +120,8 @@ func mapFinishReason(r string) string {
 		return "max_tokens"
 	case "tool_calls":
 		return "tool_use"
+	case "content_filter":
+		return "refusal"
 	}
 	return r
 }
@@ -132,6 +134,12 @@ func mapFinishReasonReverse(r string) string {
 		return "length"
 	case "tool_use":
 		return "tool_calls"
+	case "stop_sequence":
+		return "stop"
+	case "pause_turn":
+		return "stop"
+	case "refusal":
+		return "content_filter"
 	}
 	return r
 }

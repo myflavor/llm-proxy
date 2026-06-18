@@ -29,10 +29,12 @@ type IRMessage struct {
 }
 
 type IRContentBlock struct {
-	Type      string                 // text / image / thinking / tool_use
+	Type      string                 // text / image / thinking / redacted_thinking / tool_use
 	Text      string                 // text 内容
 	ImageURL  string                 // 图片 URL (data: 或 https:)
 	Thinking  string                 // thinking/reasoning 文本
+	Signature string                 // thinking block 签名（Anthropic 多轮对话需要）
+	Data      string                 // redacted_thinking 的加密数据
 	ToolUseID string                 // tool_use 的 ID
 	ToolName  string                 // tool_use 的函数名
 	ToolInput map[string]interface{} // tool_use 的参数
