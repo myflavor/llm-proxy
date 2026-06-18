@@ -12,19 +12,23 @@ import (
 
 // anthropicMsgReq is the Anthropic Messages API request.
 type anthropicMsgReq struct {
-	Model         string             `json:"model"`
-	Messages      []anthropicMsg     `json:"messages"`
-	System        interface{}        `json:"system"`
-	MaxTokens     int                `json:"max_tokens"`
-	Temperature   *float64           `json:"temperature,omitempty"`
-	TopP          *float64           `json:"top_p,omitempty"`
-	StopSequences []string           `json:"stop_sequences,omitempty"`
-	Stream        bool               `json:"stream,omitempty"`
-	Tools         []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice    interface{}        `json:"tool_choice,omitempty"`
-	Thinking      *anthropicThinking `json:"thinking,omitempty"`
-	Effort        string             `json:"effort,omitempty"` // thinking effort level
-	Metadata      *anthropicMetadata `json:"metadata,omitempty"`
+	Model         string              `json:"model"`
+	Messages      []anthropicMsg      `json:"messages"`
+	System        interface{}         `json:"system"`
+	MaxTokens     int                 `json:"max_tokens"`
+	Temperature   *float64            `json:"temperature,omitempty"`
+	TopP          *float64            `json:"top_p,omitempty"`
+	StopSequences []string            `json:"stop_sequences,omitempty"`
+	Stream        bool                `json:"stream,omitempty"`
+	Tools         []anthropicTool     `json:"tools,omitempty"`
+	ToolChoice    interface{}         `json:"tool_choice,omitempty"`
+	Thinking      *anthropicThinking  `json:"thinking,omitempty"`
+	OutputConfig  *anthropicOutputCfg `json:"output_config,omitempty"`
+	Metadata      *anthropicMetadata  `json:"metadata,omitempty"`
+}
+
+type anthropicOutputCfg struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type anthropicMsg struct {

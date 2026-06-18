@@ -156,6 +156,24 @@ curl http://localhost:5000/v1/models \
 | **Messages** | 自动转换 | 直接转发 | 自动转换 |
 | **Responses** | 自动转换 | - | 直接转发 |
 
+## Thinking / Effort 支持
+
+代理支持跨协议的 thinking effort 参数转换：
+
+| 客户端格式 | effort 字段 | 值 |
+|-----------|------------|---|
+| Anthropic Messages | `output_config.effort` | `low` / `medium` / `high` / `xhigh` / `max` |
+| OpenAI Responses | `reasoning.effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` |
+| OpenAI Chat Completions | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |
+
+effort 值在转换时自动映射，超出目标协议范围的值会降级到最高支持等级。
+
+代理日志会显示 effort 转换过程：
+```
+[effort] MiniMax-M3-responses: max → responses/MiniMax-M3
+[effort→] reasoning.effort=xhigh (clamped from max)
+```
+
 ## 架构
 
 ```
@@ -168,6 +186,22 @@ curl http://localhost:5000/v1/models \
 2. `irToFormat()` — 响应转换
 
 流式传输通过 IR 流式事件桥接，不经过完整 IR 缓冲。
+
+### 文件结构
+
+| 文件 | 职责 |
+|------|------|
+| `ir.go` | IR 中间表示类型定义 |
+| `config.go` | 配置解析 |
+| `convert.go` | 公共工具函数、Anthropic 类型定义 |
+| `convert_ir.go` | 所有 IR 转换函数（各格式 ↔ IR） |
+| `middleware.go` | 认证、日志、CORS |
+| `provider.go` | 模型查找 |
+| `main.go` | 入口、路由注册 |
+| `anthropic.go` | Anthropic handler |
+| `openai.go` | OpenAI handler |
+| `responses.go` | Responses handler + 流式翻译 |
+| `stream.go` | 流式透传 |
 
 ## 从源码编译
 

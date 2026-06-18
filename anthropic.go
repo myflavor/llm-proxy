@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -34,6 +35,10 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 			"error": map[string]interface{}{"message": err.Error(), "type": "invalid_request_error"},
 		})
 		return
+	}
+
+	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
+		log.Printf("[effort] %s: %s → %s/%s", req.Model, req.OutputConfig.Effort, p.Type, p.Name)
 	}
 
 	switch p.Type {
