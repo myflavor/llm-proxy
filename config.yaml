@@ -36,6 +36,8 @@ models:
     base_url: https://api.minimaxi.com/v1
     extra_params:
       reasoning_split: true
+      thinking:
+        type: adaptive
 
   - name: MiniMax-M3-anthropic
     provider: anthropic

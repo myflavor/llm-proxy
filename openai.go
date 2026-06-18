@@ -19,6 +19,7 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 
 	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
 	var started bool
+	var toolCallID, toolCallName string
 
 	for scanner.Scan() {
 		select {
@@ -56,6 +57,23 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 			b, _ := json.Marshal(chunk)
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
+
+		case "content_block_start":
+			if !started {
+				continue
+			}
+			cb, _ := event["content_block"].(map[string]interface{})
+			cbType, _ := cb["type"].(string)
+			if cbType == "tool_use" {
+				toolCallID, _ = cb["id"].(string)
+				toolCallName, _ = cb["name"].(string)
+				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
+					"tool_calls": []interface{}{map[string]interface{}{
+						"index": 0, "type": "function", "id": toolCallID,
+						"function": map[string]interface{}{"name": toolCallName, "arguments": ""},
+					}},
+				}, nil)
+			}
 
 		case "content_block_delta":
 			if !started {
@@ -155,6 +173,9 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m["model"] = p.Name
+		if len(p.ExtraParams) > 0 {
+			applyExtraParams(m, p.ExtraParams)
+		}
 		rewritten, _ := json.Marshal(m)
 		forwardOpenAI(w, r, p, rewritten)
 
@@ -227,5 +248,217 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		irResp := anthropicToIR(resBody, req.Model)
 		openaiResp := irToChatCompletionsResponse(irResp)
 		writeJSON(w, resp.StatusCode, openaiResp)
+
+	case ProviderResponses:
+		// Convert OpenAI request → IR → Responses format.
+		ir, err := chatCompletionsToIRRequest(body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": map[string]interface{}{"message": err.Error(), "type": "invalid_request_error"},
+			})
+			return
+		}
+		ir.Model = p.Name
+		responsesReq := irToResponsesRequest(ir)
+		applyExtraParams(responsesReq, p.ExtraParams)
+		responsesBody, err := json.Marshal(responsesReq)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
+			})
+			return
+		}
+
+		ctx := r.Context()
+		req2, err := http.NewRequestWithContext(ctx, "POST", p.ResponsesURL, bytes.NewReader(responsesBody))
+		if err != nil {
+			writeProxyError(w, r, err)
+			return
+		}
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("Authorization", "Bearer "+p.APIKey)
+
+		resp, err := httpClient.Do(req2)
+		if err != nil {
+			writeProxyError(w, r, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			errBody, _ := io.ReadAll(resp.Body)
+			writeJSON(w, resp.StatusCode, map[string]interface{}{
+				"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
+			})
+			return
+		}
+
+		if ir.Stream {
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+					"error": map[string]interface{}{"message": "streaming not supported", "type": "server_error"},
+				})
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			http.NewResponseController(w).SetWriteDeadline(time.Time{})
+			w.WriteHeader(resp.StatusCode)
+
+			if err := translateResponsesToOpenAIStream(ctx, resp.Body, w, flusher, req.Model); err != nil {
+				return
+			}
+			return
+		}
+
+		// Non-streaming: Responses response → IR → OpenAI format.
+		resBody, _ := io.ReadAll(resp.Body)
+		irResp := responsesToIRResponse(resBody, req.Model)
+		openaiResp := irToChatCompletionsResponse(irResp)
+		writeJSON(w, resp.StatusCode, openaiResp)
 	}
+}
+
+// translateResponsesToOpenAIStream translates Responses SSE → OpenAI Chat Completions SSE.
+func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
+	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
+	var started bool
+	var inputTokens, outputTokens int
+	var hasToolCalls bool
+	var toolID, toolName string
+
+	scanner := bufio.NewScanner(upstream)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "event: ") {
+			continue
+		}
+		eventType := strings.TrimPrefix(line, "event: ")
+
+		if !scanner.Scan() {
+			break
+		}
+		dataLine := scanner.Text()
+		if !strings.HasPrefix(dataLine, "data: ") {
+			continue
+		}
+		dataStr := strings.TrimPrefix(dataLine, "data: ")
+
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
+			continue
+		}
+
+		switch eventType {
+		case "response.created":
+			started = true
+			chunk := map[string]interface{}{
+				"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),
+				"model": model, "choices": []interface{}{map[string]interface{}{
+					"index": 0, "delta": map[string]interface{}{"role": "assistant", "content": ""},
+					"finish_reason": nil,
+				}},
+			}
+			b, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+
+		case "response.output_text.delta":
+			if !started {
+				continue
+			}
+			delta, _ := event["delta"].(string)
+			if delta != "" {
+				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"content": delta}, nil)
+			}
+
+		case "response.output_item.added":
+			if !started {
+				continue
+			}
+			item, _ := event["item"].(map[string]interface{})
+			itemType, _ := item["type"].(string)
+			if itemType == "function_call" {
+				hasToolCalls = true
+				toolID, _ = item["call_id"].(string)
+				toolName, _ = item["name"].(string)
+				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
+					"tool_calls": []interface{}{map[string]interface{}{
+						"index": 0, "type": "function", "id": toolID,
+						"function": map[string]interface{}{"name": toolName, "arguments": ""},
+					}},
+				}, nil)
+			}
+
+		case "response.function_call_arguments.delta":
+			if !started {
+				continue
+			}
+			delta, _ := event["delta"].(string)
+			if delta != "" {
+				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
+					"tool_calls": []interface{}{map[string]interface{}{
+						"index": 0, "type": "function",
+						"function": map[string]interface{}{"arguments": delta},
+					}},
+				}, nil)
+			}
+
+		case "response.completed":
+			respData, _ := event["response"].(map[string]interface{})
+			if usage, ok := respData["usage"].(map[string]interface{}); ok {
+				if v, ok := usage["input_tokens"].(float64); ok {
+					inputTokens = int(v)
+				}
+				if v, ok := usage["output_tokens"].(float64); ok {
+					outputTokens = int(v)
+				}
+			}
+			if !started {
+				started = true
+				chunk := map[string]interface{}{
+					"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),
+					"model": model, "choices": []interface{}{map[string]interface{}{
+						"index": 0, "delta": map[string]interface{}{"role": "assistant", "content": ""},
+						"finish_reason": nil,
+					}},
+				}
+				b, _ := json.Marshal(chunk)
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				flusher.Flush()
+			}
+			finishReason := "stop"
+			if hasToolCalls {
+				finishReason = "tool_calls"
+			}
+			chunk := map[string]interface{}{
+				"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),
+				"model": model, "choices": []interface{}{map[string]interface{}{
+					"index": 0, "delta": map[string]interface{}{}, "finish_reason": finishReason,
+				}},
+			}
+			if inputTokens > 0 || outputTokens > 0 {
+				chunk["usage"] = map[string]interface{}{
+					"prompt_tokens":     inputTokens,
+					"completion_tokens": outputTokens,
+					"total_tokens":      inputTokens + outputTokens,
+				}
+			}
+			b, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return nil
+		}
+	}
+	return scanner.Err()
 }

@@ -126,7 +126,7 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		oa["stream_options"] = map[string]interface{}{"include_usage": true}
 	}
 	if ir.MaxTokens > 0 {
-		oa["max_tokens"] = ir.MaxTokens
+		oa["max_completion_tokens"] = ir.MaxTokens
 	}
 	if ir.Temperature != nil {
 		oa["temperature"] = *ir.Temperature
@@ -175,6 +175,7 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 					})
 				}
 			}
+			msg["content"] = nil
 			if len(textParts) > 0 {
 				msg["content"] = strings.Join(textParts, "")
 			}
@@ -256,8 +257,8 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		}
 	}
 
-	// reasoning_effort
-	if ir.Thinking != nil && ir.Thinking.Effort != "" {
+	// reasoning_effort (OpenAI standard)
+	if ir.Thinking != nil && ir.Thinking.Effort != "" && ir.Thinking.Effort != "none" {
 		oa["reasoning_effort"] = ir.Thinking.Effort
 		log.Printf("[effort→] reasoning_effort=%s", ir.Thinking.Effort)
 	}
@@ -644,9 +645,10 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 					args, _ := fn["arguments"].(string)
 					var input map[string]interface{}
 					json.Unmarshal([]byte(args), &input)
+					id, _ := tc["id"].(string)
 					msg.Content = append(msg.Content, IRContentBlock{
 						Type:      "tool_use",
-						ToolUseID: tc["id"].(string),
+						ToolUseID: id,
 						ToolName:  name,
 						ToolInput: input,
 					})
@@ -698,6 +700,7 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
 	msg := map[string]interface{}{"role": "assistant"}
 	var content string
+	var reasoningParts []string
 	var toolCalls []interface{}
 
 	for _, b := range ir.Content {
@@ -705,7 +708,7 @@ func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
 		case "text":
 			content += b.Text
 		case "thinking":
-			msg["reasoning_content"] = b.Thinking
+			reasoningParts = append(reasoningParts, b.Thinking)
 		case "tool_use":
 			toolCalls = append(toolCalls, map[string]interface{}{
 				"id":   b.ToolUseID,
@@ -719,6 +722,9 @@ func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
 	}
 	if content != "" {
 		msg["content"] = content
+	}
+	if len(reasoningParts) > 0 {
+		msg["reasoning_content"] = strings.Join(reasoningParts, "")
 	}
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = toolCalls
@@ -1078,11 +1084,21 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 	for _, b := range ir.Content {
 		switch b.Type {
 		case "thinking":
+			reasoningContent := []interface{}{}
+			reasoningSummary := []interface{}{}
+			if b.Thinking != "" {
+				reasoningContent = []interface{}{map[string]interface{}{
+					"type": "reasoning_text", "text": b.Thinking,
+				}}
+				reasoningSummary = []interface{}{map[string]interface{}{
+					"type": "summary_text", "text": b.Thinking,
+				}}
+			}
 			output = append(output, map[string]interface{}{
 				"type":    "reasoning",
 				"id":      "rs_" + randomHex(12),
-				"content": []interface{}{},
-				"summary": []interface{}{},
+				"content": reasoningContent,
+				"summary": reasoningSummary,
 			})
 		case "text":
 			messageContent = append(messageContent, map[string]interface{}{

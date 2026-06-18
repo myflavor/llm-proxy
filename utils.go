@@ -58,6 +58,14 @@ func extractText(v interface{}) string {
 	switch c := v.(type) {
 	case string:
 		return c
+	case []IRContentBlock:
+		var sb strings.Builder
+		for _, b := range c {
+			if b.Type == "text" {
+				sb.WriteString(b.Text)
+			}
+		}
+		return sb.String()
 	case []interface{}:
 		var sb strings.Builder
 		for _, block := range c {
