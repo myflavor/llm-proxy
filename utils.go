@@ -161,24 +161,6 @@ func budgetToEffort(budget int) string {
 	}
 }
 
-// effortToBudget 将 effort 字符串转为 Anthropic 的 budget_tokens。
-func effortToBudget(effort string) int {
-	switch effort {
-	case "none":
-		return 0
-	case "minimal":
-		return 1024
-	case "low":
-		return 2048
-	case "medium":
-		return 8192
-	case "high", "xhigh", "max", "ultracode":
-		return 32768
-	default:
-		return 8192
-	}
-}
-
 // clampEffortForResponses 将 effort 限制在 Responses API 支持范围内。
 func clampEffortForResponses(effort string) string {
 	switch effort {

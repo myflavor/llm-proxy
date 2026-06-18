@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,8 +13,7 @@ import (
 
 // translateAnthropicToOpenAIStream translates Anthropic SSE → OpenAI SSE.
 func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner := newSSEScanner(upstream)
 
 	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
 	var started bool
@@ -177,7 +175,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			applyExtraParams(m, p.ExtraParams)
 		}
 		rewritten, _ := json.Marshal(m)
-		forwardOpenAI(w, r, p, rewritten)
+		forwardUpstream(w, r, p.ChatURL, p.APIKey, rewritten, nil)
 
 	case ProviderAnthropic:
 		// Convert OpenAI request → IR → Anthropic format.
@@ -232,10 +230,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			http.NewResponseController(w).SetWriteDeadline(time.Time{})
-			w.WriteHeader(resp.StatusCode)
+			startSSEStream(w, resp.StatusCode)
 
 			if err := translateAnthropicToOpenAIStream(ctx, resp.Body, w, flusher, req.Model); err != nil {
 				return
@@ -301,10 +296,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			http.NewResponseController(w).SetWriteDeadline(time.Time{})
-			w.WriteHeader(resp.StatusCode)
+			startSSEStream(w, resp.StatusCode)
 
 			if err := translateResponsesToOpenAIStream(ctx, resp.Body, w, flusher, req.Model); err != nil {
 				return
@@ -323,13 +315,19 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 // translateResponsesToOpenAIStream translates Responses SSE → OpenAI Chat Completions SSE.
 func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
-	var started bool
+	var started, isReasoning bool
 	var inputTokens, outputTokens int
 	var hasToolCalls bool
 	var toolID, toolName string
 
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner := newSSEScanner(upstream)
+
+	ensureStarted := func() {
+		if !started {
+			started = true
+			emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"role": "assistant", "content": ""}, nil)
+		}
+	}
 
 	for scanner.Scan() {
 		select {
@@ -360,34 +358,18 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 
 		switch eventType {
 		case "response.created":
-			started = true
-			chunk := map[string]interface{}{
-				"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),
-				"model": model, "choices": []interface{}{map[string]interface{}{
-					"index": 0, "delta": map[string]interface{}{"role": "assistant", "content": ""},
-					"finish_reason": nil,
-				}},
-			}
-			b, _ := json.Marshal(chunk)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-
-		case "response.output_text.delta":
-			if !started {
-				continue
-			}
-			delta, _ := event["delta"].(string)
-			if delta != "" {
-				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"content": delta}, nil)
-			}
+			ensureStarted()
 
 		case "response.output_item.added":
-			if !started {
-				continue
-			}
+			ensureStarted()
 			item, _ := event["item"].(map[string]interface{})
 			itemType, _ := item["type"].(string)
-			if itemType == "function_call" {
+			switch itemType {
+			case "reasoning":
+				isReasoning = true
+			case "message":
+				isReasoning = false
+			case "function_call":
 				hasToolCalls = true
 				toolID, _ = item["call_id"].(string)
 				toolName, _ = item["name"].(string)
@@ -397,6 +379,19 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 						"function": map[string]interface{}{"name": toolName, "arguments": ""},
 					}},
 				}, nil)
+			}
+
+		case "response.output_text.delta":
+			if !started {
+				continue
+			}
+			delta, _ := event["delta"].(string)
+			if delta != "" {
+				if isReasoning {
+					emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"reasoning_content": delta}, nil)
+				} else {
+					emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"content": delta}, nil)
+				}
 			}
 
 		case "response.function_call_arguments.delta":
@@ -423,19 +418,7 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 					outputTokens = int(v)
 				}
 			}
-			if !started {
-				started = true
-				chunk := map[string]interface{}{
-					"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),
-					"model": model, "choices": []interface{}{map[string]interface{}{
-						"index": 0, "delta": map[string]interface{}{"role": "assistant", "content": ""},
-						"finish_reason": nil,
-					}},
-				}
-				b, _ := json.Marshal(chunk)
-				fmt.Fprintf(w, "data: %s\n\n", b)
-				flusher.Flush()
-			}
+			ensureStarted()
 			finishReason := "stop"
 			if hasToolCalls {
 				finishReason = "tool_calls"

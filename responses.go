@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -31,6 +30,7 @@ type responsesReq struct {
 	PreviousResponseID string            `json:"previous_response_id,omitempty"`
 	Include            []string          `json:"include,omitempty"`
 	Store              *bool             `json:"store,omitempty"`
+	ToolChoice         interface{}       `json:"tool_choice,omitempty"`
 }
 
 type responsesInputItem struct {
@@ -166,7 +166,9 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		m["model"] = p.Name
 		rewritten, _ := json.Marshal(m)
-		forwardResponses(w, r, p, rewritten)
+		forwardUpstream(w, r, p.ResponsesURL, p.APIKey, rewritten, map[string]string{
+			"Authorization": "Bearer " + p.APIKey,
+		})
 		return
 	}
 
@@ -231,10 +233,7 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 			})
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		w.WriteHeader(resp.StatusCode)
+		startSSEStream(w, resp.StatusCode)
 
 		if err := translateChatCompletionsToResponsesStream(ctx, resp.Body, w, flusher, ir.Model); err != nil {
 			return
@@ -300,10 +299,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 			})
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		w.WriteHeader(resp.StatusCode)
+		startSSEStream(w, resp.StatusCode)
 
 		if err := translateAnthropicToResponsesStream(ctx, resp.Body, w, flusher, ir.Model); err != nil {
 			return
@@ -325,80 +321,69 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	respID := "resp_" + randomHex(12)
 	msgID := "msg_" + randomHex(12)
-	var started, itemAdded, partAdded, reasoningDone bool
-	var outputTokens int
-	var inputTokens int
+	reasoningID := "rs_" + randomHex(12)
+	var started, hasReasoning, hasMessage, hasContentPart bool
+	var outputIdx int
+	var inputTokens, outputTokens int
+	var reasoningContent strings.Builder
+	var pendingToolID, pendingToolName, pendingToolCallID string // deferred close for function_call items
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
 	}
 
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner := newSSEScanner(upstream)
 
 	ensureStarted := func() error {
 		if started {
 			return nil
 		}
 		started = true
-		// response.created
-		if err := emit("response.created", map[string]interface{}{
-			"type":   "response.created",
+		return emit("response.created", map[string]interface{}{
+			"type": "response.created",
 			"response": map[string]interface{}{
 				"id": respID, "object": "response", "created_at": time.Now().Unix(),
 				"model": model, "output": []interface{}{}, "status": "in_progress",
 			},
+		})
+	}
+
+	flushReasoning := func() error {
+		if !hasReasoning {
+			return nil
+		}
+		reasoningText := reasoningContent.String()
+		if err := emit("response.output_item.done", map[string]interface{}{
+			"type": "response.output_item.done", "output_index": outputIdx,
+			"item": map[string]interface{}{
+				"type": "reasoning", "id": reasoningID,
+				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasoningText}},
+				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoningText}},
+				"status": "completed",
+			},
 		}); err != nil {
 			return err
 		}
+		outputIdx++
+		hasReasoning = false
+		reasoningID = "rs_" + randomHex(12)
+		reasoningContent.Reset()
 		return nil
 	}
 
-	ensureItemAdded := func() error {
-		if err := ensureStarted(); err != nil {
-			return err
-		}
-		if itemAdded {
-			return nil
-		}
-		itemAdded = true
-		return emit("response.output_item.added", map[string]interface{}{
-			"type": "response.output_item.added", "output_index": 0,
-			"item": map[string]interface{}{
-				"type": "message", "id": msgID, "role": "assistant",
-				"content": []interface{}{}, "status": "in_progress",
-			},
-		})
-	}
-
-	ensurePartAdded := func(contentType string) error {
-		if err := ensureItemAdded(); err != nil {
-			return err
-		}
-		if partAdded {
-			return nil
-		}
-		partAdded = true
-		return emit("response.content_part.added", map[string]interface{}{
-			"type": "response.content_part.added", "output_index": 0, "content_index": 0,
-			"part": map[string]interface{}{"type": contentType, "text": "", "annotations": []interface{}{}},
-		})
-	}
-
-	closeSequence := func() error {
-		// Close content_part if open
-		if partAdded {
+	flushMessage := func() error {
+		if hasContentPart {
 			if err := emit("response.content_part.done", map[string]interface{}{
-				"type": "response.content_part.done", "output_index": 0, "content_index": 0,
+				"type": "response.content_part.done", "output_index": outputIdx, "content_index": 0,
 				"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
 			}); err != nil {
 				return err
 			}
+			hasContentPart = false
 		}
-		// Close output_item if open
-		if itemAdded {
+		if hasMessage {
 			if err := emit("response.output_item.done", map[string]interface{}{
-				"type": "response.output_item.done", "output_index": 0,
+				"type": "response.output_item.done", "output_index": outputIdx,
 				"item": map[string]interface{}{
 					"type": "message", "id": msgID, "role": "assistant",
 					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
@@ -407,8 +392,41 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			}); err != nil {
 				return err
 			}
+			outputIdx++
+			hasMessage = false
+			msgID = "msg_" + randomHex(12)
 		}
 		return nil
+	}
+
+	closePendingTool := func() error {
+		if pendingToolID != "" {
+			if err := emit("response.output_item.done", map[string]interface{}{
+				"type": "response.output_item.done", "output_index": outputIdx,
+				"item": map[string]interface{}{
+					"type": "function_call", "id": pendingToolID,
+					"call_id": pendingToolCallID, "name": pendingToolName, "arguments": "",
+					"status": "completed",
+				},
+			}); err != nil {
+				return err
+			}
+			outputIdx++
+			pendingToolID = ""
+			pendingToolName = ""
+			pendingToolCallID = ""
+		}
+		return nil
+	}
+
+	closeAll := func() error {
+		if err := closePendingTool(); err != nil {
+			return err
+		}
+		if err := flushMessage(); err != nil {
+			return err
+		}
+		return flushReasoning()
 	}
 
 	for scanner.Scan() {
@@ -427,7 +445,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			if err := ensureStarted(); err != nil {
 				return err
 			}
-			if err := closeSequence(); err != nil {
+			if err := closeAll(); err != nil {
 				return err
 			}
 			return emit("response.completed", map[string]interface{}{
@@ -435,11 +453,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": "completed",
-					"output": []interface{}{map[string]interface{}{
-						"type": "message", "id": msgID, "role": "assistant",
-						"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
-						"status": "completed",
-					}},
+					"output": []interface{}{},
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -485,42 +499,53 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 
 		// Reasoning content → reasoning output item
 		if choice.Delta.ReasoningContent != "" {
-			if !reasoningDone {
-				if err := ensureStarted(); err != nil {
-					return err
-				}
+			if err := ensureStarted(); err != nil {
+				return err
+			}
+			if !hasReasoning {
+				hasReasoning = true
 				if err := emit("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": 0,
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
-						"type": "reasoning", "id": "rs_" + randomHex(12),
+						"type": "reasoning", "id": reasoningID,
 						"content": []interface{}{}, "summary": []interface{}{},
+						"status": "in_progress",
 					},
 				}); err != nil {
 					return err
 				}
-				reasoningDone = true
 			}
+			reasoningContent.WriteString(choice.Delta.ReasoningContent)
 		}
 
 		// Text content → output_text delta
 		if choice.Delta.Content != "" {
-			if reasoningDone && !itemAdded {
-				// Close reasoning item first
-				if err := emit("response.output_item.done", map[string]interface{}{
-					"type": "response.output_item.done", "output_index": 0,
+			if err := flushReasoning(); err != nil {
+				return err
+			}
+			if !hasMessage {
+				hasMessage = true
+				if err := emit("response.output_item.added", map[string]interface{}{
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
-						"type": "reasoning", "id": "rs_" + randomHex(12),
-						"content": []interface{}{}, "summary": []interface{}{},
+						"type": "message", "id": msgID, "role": "assistant",
+						"content": []interface{}{}, "status": "in_progress",
 					},
 				}); err != nil {
 					return err
 				}
 			}
-			if err := ensurePartAdded("output_text"); err != nil {
-				return err
+			if !hasContentPart {
+				hasContentPart = true
+				if err := emit("response.content_part.added", map[string]interface{}{
+					"type": "response.content_part.added", "output_index": outputIdx, "content_index": 0,
+					"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
+				}); err != nil {
+					return err
+				}
 			}
 			if err := emit("response.output_text.delta", map[string]interface{}{
-				"type": "response.output_text.delta", "output_index": 0, "content_index": 0,
+				"type": "response.output_text.delta", "output_index": outputIdx, "content_index": 0,
 				"delta": choice.Delta.Content,
 			}); err != nil {
 				return err
@@ -530,16 +555,25 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 		// Tool calls → function_call items
 		for _, tc := range choice.Delta.ToolCalls {
 			if tc.Function.Name != "" {
-				if err := closeSequence(); err != nil {
+				// Close any previous pending tool call
+				if err := closePendingTool(); err != nil {
 					return err
 				}
-				itemAdded = false
-				partAdded = false
+				// Close current message/reasoning
+				if err := flushMessage(); err != nil {
+					return err
+				}
+				if err := flushReasoning(); err != nil {
+					return err
+				}
+				pendingToolID = "fc_" + randomHex(12)
+				pendingToolName = tc.Function.Name
+				pendingToolCallID = tc.ID
 				if err := emit("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": 0,
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
-						"type": "function_call", "id": "fc_" + randomHex(12),
-						"call_id": tc.ID, "name": tc.Function.Name, "arguments": "",
+						"type": "function_call", "id": pendingToolID,
+						"call_id": tc.ID, "name": pendingToolName, "arguments": "",
 					},
 				}); err != nil {
 					return err
@@ -547,7 +581,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			}
 			if tc.Function.Arguments != "" {
 				if err := emit("response.function_call_arguments.delta", map[string]interface{}{
-					"type": "response.function_call_arguments.delta", "output_index": 0,
+					"type": "response.function_call_arguments.delta", "output_index": outputIdx,
 					"delta": tc.Function.Arguments,
 				}); err != nil {
 					return err
@@ -560,7 +594,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				inputTokens = chunk.Usage.PromptTokens
 				outputTokens = chunk.Usage.CompletionTokens
 			}
-			if err := closeSequence(); err != nil {
+			if err := closeAll(); err != nil {
 				return err
 			}
 			return emit("response.completed", map[string]interface{}{
@@ -587,10 +621,12 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	respID := "resp_" + randomHex(12)
 	msgID := "msg_" + randomHex(12)
-	var started bool
+	reasoningID := "rs_" + randomHex(12)
+	var started, hasReasoning, hasMessage, hasContentPart, hasFunctionCall bool
 	var inputTokens, outputTokens int
-	var blockIndex int
-	var hasTextBlock bool
+	var outputIdx int
+	var reasoningContent strings.Builder
+	var functionCallID, functionCallName string
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -610,8 +646,76 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 		})
 	}
 
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	flushFunctionCall := func() error {
+		if !hasFunctionCall {
+			return nil
+		}
+		if err := emit("response.output_item.done", map[string]interface{}{
+			"type": "response.output_item.done", "output_index": outputIdx,
+			"item": map[string]interface{}{
+				"type": "function_call", "id": functionCallID,
+				"call_id": functionCallID, "name": functionCallName, "arguments": "",
+				"status": "completed",
+			},
+		}); err != nil {
+			return err
+		}
+		outputIdx++
+		hasFunctionCall = false
+		return nil
+	}
+
+	flushReasoning := func() error {
+		if !hasReasoning {
+			return nil
+		}
+		if err := emit("response.output_item.done", map[string]interface{}{
+			"type": "response.output_item.done", "output_index": outputIdx,
+			"item": map[string]interface{}{
+				"type": "reasoning", "id": reasoningID,
+				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasoningContent.String()}},
+				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoningContent.String()}},
+				"status": "completed",
+			},
+		}); err != nil {
+			return err
+		}
+		outputIdx++
+		hasReasoning = false
+		reasoningID = "rs_" + randomHex(12)
+		reasoningContent.Reset()
+		return nil
+	}
+
+	flushMessage := func() error {
+		if hasContentPart {
+			if err := emit("response.content_part.done", map[string]interface{}{
+				"type": "response.content_part.done", "output_index": outputIdx, "content_index": 0,
+				"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
+			}); err != nil {
+				return err
+			}
+			hasContentPart = false
+		}
+		if hasMessage {
+			if err := emit("response.output_item.done", map[string]interface{}{
+				"type": "response.output_item.done", "output_index": outputIdx,
+				"item": map[string]interface{}{
+					"type": "message", "id": msgID, "role": "assistant",
+					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
+					"status": "completed",
+				},
+			}); err != nil {
+				return err
+			}
+			outputIdx++
+			hasMessage = false
+			msgID = "msg_" + randomHex(12)
+		}
+		return nil
+	}
+
+	scanner := newSSEScanner(upstream)
 
 	for scanner.Scan() {
 		select {
@@ -655,24 +759,27 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			}
 			cb, _ := event["content_block"].(map[string]interface{})
 			cbType, _ := cb["type"].(string)
-			idx, _ := event["index"].(float64)
-			blockIndex = int(idx)
 
 			switch cbType {
 			case "thinking":
+				hasReasoning = true
 				if err := emit("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": 0,
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
-						"type": "reasoning", "id": "rs_" + randomHex(12),
+						"type": "reasoning", "id": reasoningID,
 						"content": []interface{}{}, "summary": []interface{}{},
+						"status": "in_progress",
 					},
 				}); err != nil {
 					return err
 				}
 			case "text":
-				hasTextBlock = true
+				if err := flushReasoning(); err != nil {
+					return err
+				}
+				hasMessage = true
 				if err := emit("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": 0,
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
 						"type": "message", "id": msgID, "role": "assistant",
 						"content": []interface{}{}, "status": "in_progress",
@@ -680,19 +787,32 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				}); err != nil {
 					return err
 				}
+				hasContentPart = true
 				if err := emit("response.content_part.added", map[string]interface{}{
-					"type": "response.content_part.added", "output_index": 0, "content_index": blockIndex,
+					"type": "response.content_part.added", "output_index": outputIdx, "content_index": 0,
 					"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
 				}); err != nil {
 					return err
 				}
 			case "tool_use":
+				if err := flushFunctionCall(); err != nil {
+					return err
+				}
+				if err := flushMessage(); err != nil {
+					return err
+				}
+				if err := flushReasoning(); err != nil {
+					return err
+				}
 				toolID, _ := cb["id"].(string)
 				toolName, _ := cb["name"].(string)
+				functionCallID = "fc_" + randomHex(12)
+				functionCallName = toolName
+				hasFunctionCall = true
 				if err := emit("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": 0,
+					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
-						"type": "function_call", "id": "fc_" + randomHex(12),
+						"type": "function_call", "id": functionCallID,
 						"call_id": toolID, "name": toolName, "arguments": "",
 					},
 				}); err != nil {
@@ -706,15 +826,14 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			}
 			delta, _ := event["delta"].(map[string]interface{})
 			deltaType, _ := delta["type"].(string)
-			idx, _ := event["index"].(float64)
-			blockIndex = int(idx)
 
 			switch deltaType {
 			case "thinking_delta":
 				thinking, _ := delta["thinking"].(string)
-				if thinking != "" {
+				if thinking != "" && hasReasoning {
+					reasoningContent.WriteString(thinking)
 					if err := emit("response.output_text.delta", map[string]interface{}{
-						"type": "response.output_text.delta", "output_index": 0, "content_index": blockIndex,
+						"type": "response.output_text.delta", "output_index": outputIdx, "content_index": 0,
 						"delta": thinking,
 					}); err != nil {
 						return err
@@ -722,9 +841,9 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				}
 			case "text_delta":
 				text, _ := delta["text"].(string)
-				if text != "" {
+				if text != "" && hasMessage {
 					if err := emit("response.output_text.delta", map[string]interface{}{
-						"type": "response.output_text.delta", "output_index": 0, "content_index": blockIndex,
+						"type": "response.output_text.delta", "output_index": outputIdx, "content_index": 0,
 						"delta": text,
 					}); err != nil {
 						return err
@@ -734,7 +853,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				partialJSON, _ := delta["partial_json"].(string)
 				if partialJSON != "" {
 					if err := emit("response.function_call_arguments.delta", map[string]interface{}{
-						"type": "response.function_call_arguments.delta", "output_index": 0,
+						"type": "response.function_call_arguments.delta", "output_index": outputIdx,
 						"delta": partialJSON,
 					}); err != nil {
 						return err
@@ -743,42 +862,45 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			}
 
 		case "content_block_stop":
-			idx, _ := event["index"].(float64)
-			blockIndex = int(idx)
-			if hasTextBlock {
-				if err := emit("response.content_part.done", map[string]interface{}{
-					"type": "response.content_part.done", "output_index": 0, "content_index": blockIndex,
-					"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
-				}); err != nil {
+			cbType, _ := event["content_block_type"].(string)
+			_ = cbType // type info not always present; rely on state flags
+
+			if hasContentPart {
+				if err := flushMessage(); err != nil {
 					return err
 				}
-				if err := emit("response.output_item.done", map[string]interface{}{
-					"type": "response.output_item.done", "output_index": 0,
-					"item": map[string]interface{}{
-						"type": "message", "id": msgID, "role": "assistant",
-						"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
-						"status": "completed",
-					},
-				}); err != nil {
+			} else if hasReasoning {
+				if err := flushReasoning(); err != nil {
 					return err
 				}
-				hasTextBlock = false
+			} else if hasFunctionCall {
+				if err := flushFunctionCall(); err != nil {
+					return err
+				}
 			}
 
 		case "message_delta":
 			if err := ensureStarted(); err != nil {
 				return err
 			}
-			delta, _ := event["delta"].(map[string]interface{})
 			if usage, ok := event["usage"].(map[string]interface{}); ok {
 				if v, ok := usage["output_tokens"].(float64); ok {
 					outputTokens = int(v)
 				}
 			}
-			_ = delta
 
 		case "message_stop":
 			if err := ensureStarted(); err != nil {
+				return err
+			}
+			// Flush any remaining items
+			if err := flushMessage(); err != nil {
+				return err
+			}
+			if err := flushReasoning(); err != nil {
+				return err
+			}
+			if err := flushFunctionCall(); err != nil {
 				return err
 			}
 			return emit("response.completed", map[string]interface{}{
@@ -798,25 +920,6 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	return scanner.Err()
 }
 
-// forwardResponses 透传 Responses 格式请求到上游 Responses-native 端点。
-func forwardResponses(w http.ResponseWriter, r *http.Request, p *Provider, body []byte) {
-	req, err := http.NewRequestWithContext(r.Context(), "POST", p.ResponsesURL, bytes.NewReader(body))
-	if err != nil {
-		writeProxyError(w, r, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.APIKey)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		writeProxyError(w, r, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	streamPassthrough(w, resp)
-}
 
 // ============================================================
 // Responses 响应 → IR 转换
@@ -873,6 +976,14 @@ func responsesToIRResponse(body []byte, model string) *IRResponse {
 		}
 	}
 
+	// If output contains function_call items, set stop reason to tool_use
+	for _, b := range ir.Content {
+		if b.Type == "tool_use" {
+			ir.StopReason = "tool_use"
+			break
+		}
+	}
+
 	if resp.Usage != nil {
 		ir.Usage = IRUsage{
 			InputTokens:  resp.Usage.InputTokens,
@@ -888,10 +999,10 @@ func responsesToIRResponse(body []byte, model string) *IRResponse {
 
 func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	msgID := "msg_" + randomHex(16)
-	var started bool
+	var started, isReasoning, hasToolUse bool
 	var inputTokens, outputTokens int
 	var blockIndex int
-	var hasTextBlock bool
+	var hasTextBlock, hasThinkingBlock bool
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -908,8 +1019,21 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 		})
 	}
 
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	closeCurrentBlock := func() error {
+		if hasTextBlock || hasThinkingBlock {
+			if err := emit("content_block_stop", map[string]interface{}{
+				"type": "content_block_stop", "index": blockIndex,
+			}); err != nil {
+				return err
+			}
+			blockIndex++
+			hasTextBlock = false
+			hasThinkingBlock = false
+		}
+		return nil
+	}
+
+	scanner := newSSEScanner(upstream)
 
 	for scanner.Scan() {
 		select {
@@ -924,7 +1048,6 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 		}
 		eventType := strings.TrimPrefix(line, "event: ")
 
-		// Read next line for data
 		if !scanner.Scan() {
 			break
 		}
@@ -953,9 +1076,25 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 			item, _ := event["item"].(map[string]interface{})
 			itemType, _ := item["type"].(string)
 			switch itemType {
+			case "reasoning":
+				isReasoning = true
+				if err := closeCurrentBlock(); err != nil {
+					return err
+				}
+				hasThinkingBlock = true
+				if err := emit("content_block_start", map[string]interface{}{
+					"type": "content_block_start", "index": blockIndex,
+					"content_block": map[string]interface{}{"type": "thinking", "thinking": ""},
+				}); err != nil {
+					return err
+				}
 			case "message":
-				// Will emit content_block_start when content_part arrives
+				isReasoning = false
 			case "function_call":
+				hasToolUse = true
+				if err := closeCurrentBlock(); err != nil {
+					return err
+				}
 				if err := emit("content_block_start", map[string]interface{}{
 					"type": "content_block_start", "index": blockIndex,
 					"content_block": map[string]interface{}{
@@ -973,6 +1112,9 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 					return err
 				}
 			}
+			if err := closeCurrentBlock(); err != nil {
+				return err
+			}
 			hasTextBlock = true
 			if err := emit("content_block_start", map[string]interface{}{
 				"type": "content_block_start", "index": blockIndex,
@@ -984,11 +1126,20 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 		case "response.output_text.delta":
 			delta, _ := event["delta"].(string)
 			if delta != "" {
-				if err := emit("content_block_delta", map[string]interface{}{
-					"type": "content_block_delta", "index": blockIndex,
-					"delta": map[string]interface{}{"type": "text_delta", "text": delta},
-				}); err != nil {
-					return err
+				if isReasoning {
+					if err := emit("content_block_delta", map[string]interface{}{
+						"type": "content_block_delta", "index": blockIndex,
+						"delta": map[string]interface{}{"type": "thinking_delta", "thinking": delta},
+					}); err != nil {
+						return err
+					}
+				} else {
+					if err := emit("content_block_delta", map[string]interface{}{
+						"type": "content_block_delta", "index": blockIndex,
+						"delta": map[string]interface{}{"type": "text_delta", "text": delta},
+					}); err != nil {
+						return err
+					}
 				}
 			}
 
@@ -1004,26 +1155,25 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 			}
 
 		case "response.content_part.done":
-			if hasTextBlock {
-				if err := emit("content_block_stop", map[string]interface{}{
-					"type": "content_block_stop", "index": blockIndex,
-				}); err != nil {
-					return err
-				}
-				blockIndex++
-				hasTextBlock = false
+			if err := closeCurrentBlock(); err != nil {
+				return err
 			}
 
 		case "response.output_item.done":
 			item, _ := event["item"].(map[string]interface{})
 			itemType, _ := item["type"].(string)
-			if itemType == "function_call" {
-				if err := emit("content_block_stop", map[string]interface{}{
-					"type": "content_block_stop", "index": blockIndex,
-				}); err != nil {
+			switch itemType {
+			case "reasoning":
+				if hasThinkingBlock {
+					if err := closeCurrentBlock(); err != nil {
+						return err
+					}
+				}
+				isReasoning = false
+			case "function_call":
+				if err := closeCurrentBlock(); err != nil {
 					return err
 				}
-				blockIndex++
 			}
 
 		case "response.completed":
@@ -1042,9 +1192,17 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 					return err
 				}
 			}
+			// Close any remaining open block
+			if err := closeCurrentBlock(); err != nil {
+				return err
+			}
+			stopReason := "end_turn"
+			if hasToolUse {
+				stopReason = "tool_use"
+			}
 			if err := emit("message_delta", map[string]interface{}{
 				"type": "message_delta",
-				"delta": map[string]interface{}{"stop_reason": "end_turn", "stop_sequence": nil},
+				"delta": map[string]interface{}{"stop_reason": stopReason, "stop_sequence": nil},
 				"usage": map[string]interface{}{"output_tokens": outputTokens},
 			}); err != nil {
 				return err

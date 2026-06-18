@@ -43,15 +43,32 @@ func streamPassthrough(w http.ResponseWriter, resp *http.Response) {
 	}
 }
 
-// forwardOpenAI forwards an OpenAI-format request to an OpenAI upstream.
-func forwardOpenAI(w http.ResponseWriter, r *http.Request, p *Provider, body []byte) {
-	req, err := http.NewRequestWithContext(r.Context(), "POST", p.ChatURL, bytes.NewReader(body))
+// startSSEStream sets response headers for an SSE stream.
+func startSSEStream(w http.ResponseWriter, statusCode int) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	w.WriteHeader(statusCode)
+}
+
+// newSSEScanner creates a scanner tuned for SSE line parsing.
+func newSSEScanner(r io.Reader) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	s.Buffer(make([]byte, 64*1024), 1024*1024)
+	return s
+}
+
+// forwardUpstream forwards a request body to an upstream endpoint and streams the response back.
+func forwardUpstream(w http.ResponseWriter, r *http.Request, url string, apiKey string, body []byte, extraHeaders map[string]string) {
+	req, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewReader(body))
 	if err != nil {
 		writeProxyError(w, r, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -136,8 +153,7 @@ func translateStream(ctx context.Context, upstream io.Reader, w io.Writer, flush
 		return emitSSE(w, flusher, "message_stop", map[string]interface{}{"type": "message_stop"})
 	}
 
-	scanner := bufio.NewScanner(upstream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner := newSSEScanner(upstream)
 
 	for scanner.Scan() {
 		select {

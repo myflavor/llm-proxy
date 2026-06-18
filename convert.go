@@ -103,6 +103,21 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 		ir.Thinking = &IRThinking{Enabled: true, Effort: req.Reasoning.Effort, Summary: req.Reasoning.Summary}
 	}
 
+	// tool_choice
+	if req.ToolChoice != nil {
+		tc := &IRToolChoice{}
+		switch v := req.ToolChoice.(type) {
+		case string:
+			tc.Type = v
+		case map[string]interface{}:
+			if fn, ok := v["function"].(map[string]interface{}); ok {
+				tc.Type = "specific"
+				tc.Name, _ = fn["name"].(string)
+			}
+		}
+		ir.ToolChoice = tc
+	}
+
 	// text.format → extensions
 	if req.Text != nil && req.Text.Format != nil {
 		ir.Extensions = map[string]interface{}{
@@ -271,9 +286,13 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 // ============================================================
 
 func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
+	maxTokens := req.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 4096 // Anthropic requires max_tokens > 0 for actual generation
+	}
 	ir := &IRRequest{
 		Model:         req.Model,
-		MaxTokens:     req.MaxTokens,
+		MaxTokens:     maxTokens,
 		Temperature:   req.Temperature,
 		TopP:          req.TopP,
 		StopSequences: req.StopSequences,
@@ -477,7 +496,7 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 							headerParts := strings.SplitN(parts[0], ":", 2)
 							mediaType := ""
 							if len(headerParts) == 2 {
-								mediaType = strings.TrimSuffix(strings.TrimPrefix(headerParts[1], "application/"), ";base64")
+								mediaType = strings.TrimSuffix(headerParts[1], ";base64")
 							}
 							blocks = append(blocks, map[string]interface{}{
 								"type": "image",
@@ -587,9 +606,10 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 	var oa struct {
 		Model       string                   `json:"model"`
 		Messages    []map[string]interface{} `json:"messages"`
-		MaxTokens   int                      `json:"max_tokens"`
-		Temperature *float64                 `json:"temperature,omitempty"`
-		TopP        *float64                 `json:"top_p,omitempty"`
+		MaxTokens           int     `json:"max_tokens"`
+		MaxCompletionTokens int     `json:"max_completion_tokens"`
+		Temperature         *float64 `json:"temperature,omitempty"`
+		TopP                *float64 `json:"top_p,omitempty"`
 		Stop        []string                 `json:"stop,omitempty"`
 		Stream      bool                     `json:"stream,omitempty"`
 		Tools       []struct {
@@ -608,9 +628,13 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 		return nil, err
 	}
 
+	maxTokens := oa.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = oa.MaxCompletionTokens // max_completion_tokens is the newer field
+	}
 	ir := &IRRequest{
 		Model:         oa.Model,
-		MaxTokens:     oa.MaxTokens,
+		MaxTokens:     maxTokens,
 		Temperature:   oa.Temperature,
 		TopP:          oa.TopP,
 		StopSequences: oa.Stop,
@@ -852,6 +876,8 @@ func chatCompletionsToIR(body []byte, model string) *IRResponse {
 		}
 		if oa.Choices[0].FinishReason != nil {
 			ir.StopReason = mapFinishReason(*oa.Choices[0].FinishReason)
+		} else {
+			ir.StopReason = "end_turn"
 		}
 	}
 
@@ -1090,6 +1116,15 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 			req["tool_choice"] = "auto"
 		case "none":
 			req["tool_choice"] = "none"
+		case "required", "any":
+			req["tool_choice"] = "required"
+		case "specific":
+			if ir.ToolChoice.Name != "" {
+				req["tool_choice"] = map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{"name": ir.ToolChoice.Name},
+				}
+			}
 		}
 	}
 
@@ -1126,6 +1161,17 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 	for _, b := range ir.Content {
 		switch b.Type {
 		case "thinking":
+			// Flush any pending message content first
+			if len(messageContent) > 0 {
+				output = append(output, map[string]interface{}{
+					"type":    "message",
+					"id":      "msg_" + randomHex(12),
+					"role":    "assistant",
+					"content": messageContent,
+					"status":  "completed",
+				})
+				messageContent = nil
+			}
 			reasoningContent := []interface{}{}
 			reasoningSummary := []interface{}{}
 			if b.Thinking != "" {

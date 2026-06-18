@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"time"
 )
 
 // handleAnthropic handles POST /v1/messages.
@@ -46,7 +45,10 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		// Rewrite model name and forward.
 		req.Model = p.Name
 		rewritten, _ := json.Marshal(req)
-		forwardAnthropic(w, r, p, rewritten)
+		forwardUpstream(w, r, p.MessagesURL, p.APIKey, rewritten, map[string]string{
+			"x-api-key":         p.APIKey,
+			"anthropic-version": "2023-06-01",
+		})
 
 	case ProviderResponses:
 		// Convert Anthropic request → IR → Responses format.
@@ -94,10 +96,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			http.NewResponseController(w).SetWriteDeadline(time.Time{})
-			w.WriteHeader(resp.StatusCode)
+			startSSEStream(w, resp.StatusCode)
 
 			if err := translateResponsesToAnthropicStream(ctx, resp.Body, w, flusher, req.Model); err != nil {
 				return
@@ -161,10 +160,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			http.NewResponseController(w).SetWriteDeadline(time.Time{})
-			w.WriteHeader(resp.StatusCode)
+			startSSEStream(w, resp.StatusCode)
 
 			inputTokens := countTokens(oaReq)
 			if err := translateStream(ctx, resp.Body, w, flusher, req.Model, inputTokens); err != nil {
@@ -181,23 +177,3 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// forwardAnthropic forwards an Anthropic-format request to an Anthropic upstream.
-func forwardAnthropic(w http.ResponseWriter, r *http.Request, p *Provider, body []byte) {
-	req, err := http.NewRequestWithContext(r.Context(), "POST", p.MessagesURL, bytes.NewReader(body))
-	if err != nil {
-		writeProxyError(w, r, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", p.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		writeProxyError(w, r, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	streamPassthrough(w, resp)
-}

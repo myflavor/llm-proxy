@@ -32,7 +32,7 @@ models:
   - name: MiniMax-M3-openai
     provider: openai
     model: MiniMax-M3
-    api_key: sk-your-minimax-key
+    api_key: ${MINIMAX_API_KEY}
     base_url: https://api.minimaxi.com/v1
     extra_params:
       reasoning_split: true
@@ -42,11 +42,11 @@ models:
   - name: MiniMax-M3-anthropic
     provider: anthropic
     model: MiniMax-M3
-    api_key: sk-your-minimax-key
+    api_key: ${MINIMAX_API_KEY}
     base_url: https://api.minimaxi.com/anthropic
 
   - name: MiniMax-M3-responses
     provider: responses
     model: MiniMax-M3
-    api_key: sk-your-minimax-key
+    api_key: ${MINIMAX_API_KEY}
     base_url: https://api.minimaxi.com/v1
