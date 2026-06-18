@@ -2,216 +2,1135 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
-// --- Anthropic request types ---
-
-// anthropicMsgReq is the Anthropic Messages API request.
-type anthropicMsgReq struct {
-	Model         string              `json:"model"`
-	Messages      []anthropicMsg      `json:"messages"`
-	System        interface{}         `json:"system"`
-	MaxTokens     int                 `json:"max_tokens"`
-	Temperature   *float64            `json:"temperature,omitempty"`
-	TopP          *float64            `json:"top_p,omitempty"`
-	StopSequences []string            `json:"stop_sequences,omitempty"`
-	Stream        bool                `json:"stream,omitempty"`
-	Tools         []anthropicTool     `json:"tools,omitempty"`
-	ToolChoice    interface{}         `json:"tool_choice,omitempty"`
-	Thinking      *anthropicThinking  `json:"thinking,omitempty"`
-	OutputConfig  *anthropicOutputCfg `json:"output_config,omitempty"`
-	Metadata      *anthropicMetadata  `json:"metadata,omitempty"`
+// applyExtraParams 将 Provider 的 ExtraParams 合并到请求体 map 中。
+func applyExtraParams(req map[string]interface{}, extra map[string]interface{}) {
+	for k, v := range extra {
+		req[k] = v
+	}
 }
 
-type anthropicOutputCfg struct {
-	Effort string `json:"effort,omitempty"`
-}
+// ============================================================
+// Responses → IR 转换
+// ============================================================
 
-type anthropicMsg struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
-}
+func responsesToIR(body []byte) (*IRRequest, error) {
+	var req responsesReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
 
-type anthropicTool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema interface{} `json:"input_schema"`
-}
+	ir := &IRRequest{
+		Model:       req.Model,
+		Stream:      req.Stream,
+		MaxTokens:   req.MaxOutputTokens,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+	}
 
-type anthropicThinking struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens,omitempty"`
-}
+	// instructions → system prompt
+	ir.SystemPrompt = req.Instructions
 
-type anthropicMetadata struct {
-	UserID string `json:"user_id,omitempty"`
-}
-
-// --- Content extraction helpers ---
-
-// extractText handles Anthropic's polymorphic content field (string or []contentBlock).
-func extractText(v interface{}) string {
-	switch c := v.(type) {
+	// input → messages
+	switch v := req.Input.(type) {
 	case string:
-		return c
+		if v != "" {
+			ir.Messages = append(ir.Messages, IRMessage{
+				Role:    "user",
+				Content: []IRContentBlock{{Type: "text", Text: v}},
+			})
+		}
 	case []interface{}:
-		var sb strings.Builder
-		for _, block := range c {
-			b, ok := block.(map[string]interface{})
-			if !ok {
+		for _, raw := range v {
+			itemBytes, _ := json.Marshal(raw)
+			var item responsesInputItem
+			if err := json.Unmarshal(itemBytes, &item); err != nil {
 				continue
 			}
-			if t, _ := b["type"].(string); t == "text" {
-				if txt, ok := b["text"].(string); ok {
-					sb.WriteString(txt)
+			switch item.Type {
+			case "message":
+				msg := IRMessage{Role: item.Role}
+				switch c := item.Content.(type) {
+				case string:
+					if c != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "text", Text: c})
+					}
+				case []interface{}:
+					for _, partRaw := range c {
+						partBytes, _ := json.Marshal(partRaw)
+						var part responsesContentPart
+						if err := json.Unmarshal(partBytes, &part); err != nil {
+							continue
+						}
+						switch part.Type {
+						case "input_text":
+							msg.Content = append(msg.Content, IRContentBlock{Type: "text", Text: part.Text})
+						case "input_image":
+							msg.Content = append(msg.Content, IRContentBlock{Type: "image", ImageURL: part.ImageURL})
+						}
+					}
+				}
+				if len(msg.Content) > 0 {
+					ir.Messages = append(ir.Messages, msg)
+				}
+			case "function_call_output":
+				ir.Messages = append(ir.Messages, IRMessage{
+					Role:       "tool",
+					ToolCallID: item.CallID,
+					Content:    []IRContentBlock{{Type: "text", Text: item.Output}},
+				})
+			}
+		}
+	}
+
+	// tools
+	for _, t := range req.Tools {
+		if t.Type == "function" {
+			ir.Tools = append(ir.Tools, IRTool{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			})
+		}
+	}
+
+	// reasoning
+	if req.Reasoning != nil {
+		ir.Thinking = &IRThinking{Enabled: true, Effort: req.Reasoning.Effort}
+	}
+
+	// text.format → extensions
+	if req.Text != nil && req.Text.Format != nil {
+		ir.Extensions = map[string]interface{}{
+			"response_format": req.Text.Format,
+		}
+	}
+
+	return ir, nil
+}
+
+// ============================================================
+// IR → Chat Completions 请求转换
+// ============================================================
+
+func irToChatCompletions(ir *IRRequest) map[string]interface{} {
+	oa := map[string]interface{}{
+		"model":  ir.Model,
+		"stream": ir.Stream,
+	}
+	if ir.Stream {
+		oa["stream_options"] = map[string]interface{}{"include_usage": true}
+	}
+	if ir.MaxTokens > 0 {
+		oa["max_tokens"] = ir.MaxTokens
+	}
+	if ir.Temperature != nil {
+		oa["temperature"] = *ir.Temperature
+	}
+	if ir.TopP != nil {
+		oa["top_p"] = *ir.TopP
+	}
+	if len(ir.StopSequences) > 0 {
+		oa["stop"] = ir.StopSequences
+	}
+	if ir.Metadata != nil && ir.Metadata.UserID != "" {
+		oa["user"] = ir.Metadata.UserID
+	}
+	// structured output
+	if ir.Extensions != nil {
+		if rf, ok := ir.Extensions["response_format"]; ok {
+			oa["response_format"] = rf
+		}
+	}
+
+	// messages
+	var messages []interface{}
+	if ir.SystemPrompt != "" {
+		messages = append(messages, map[string]interface{}{"role": "system", "content": ir.SystemPrompt})
+	}
+	for _, m := range ir.Messages {
+		if m.Role == "assistant" {
+			msg := map[string]interface{}{"role": "assistant"}
+			var textParts []string
+			var reasoningParts []string
+			var toolCalls []interface{}
+			for _, b := range m.Content {
+				switch b.Type {
+				case "text":
+					textParts = append(textParts, b.Text)
+				case "thinking":
+					reasoningParts = append(reasoningParts, b.Thinking)
+				case "tool_use":
+					toolCalls = append(toolCalls, map[string]interface{}{
+						"id":   b.ToolUseID,
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      b.ToolName,
+							"arguments": mustJSON(b.ToolInput),
+						},
+					})
+				}
+			}
+			if len(textParts) > 0 {
+				msg["content"] = strings.Join(textParts, "")
+			}
+			if len(reasoningParts) > 0 {
+				msg["reasoning_content"] = strings.Join(reasoningParts, "")
+			}
+			if len(toolCalls) > 0 {
+				msg["tool_calls"] = toolCalls
+			}
+			messages = append(messages, msg)
+		} else if m.Role == "tool" {
+			messages = append(messages, map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": m.ToolCallID,
+				"content":      extractText(m.Content),
+			})
+		} else {
+			// user message — check for image blocks
+			var contentParts []interface{}
+			for _, b := range m.Content {
+				switch b.Type {
+				case "text":
+					contentParts = append(contentParts, map[string]interface{}{"type": "text", "text": b.Text})
+				case "image":
+					contentParts = append(contentParts, map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{"url": b.ImageURL},
+					})
+				}
+			}
+			if len(contentParts) == 0 {
+				continue
+			}
+			if len(contentParts) == 1 {
+				if p, ok := contentParts[0].(map[string]interface{}); ok && p["type"] == "text" {
+					messages = append(messages, map[string]interface{}{"role": "user", "content": p["text"]})
+				} else {
+					messages = append(messages, map[string]interface{}{"role": "user", "content": contentParts})
+				}
+			} else {
+				messages = append(messages, map[string]interface{}{"role": "user", "content": contentParts})
+			}
+		}
+	}
+	oa["messages"] = messages
+
+	// tools
+	if len(ir.Tools) > 0 {
+		var tools []interface{}
+		for _, t := range ir.Tools {
+			tools = append(tools, map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name":        t.Name,
+					"description": t.Description,
+					"parameters":  t.Parameters,
+				},
+			})
+		}
+		oa["tools"] = tools
+	}
+
+	// tool_choice
+	if ir.ToolChoice != nil {
+		switch ir.ToolChoice.Type {
+		case "auto":
+			oa["tool_choice"] = "auto"
+		case "required", "any":
+			oa["tool_choice"] = "required"
+		case "none":
+			oa["tool_choice"] = "none"
+		case "specific":
+			if ir.ToolChoice.Name != "" {
+				oa["tool_choice"] = map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{"name": ir.ToolChoice.Name},
 				}
 			}
 		}
-		return sb.String()
 	}
-	return ""
+
+	// reasoning_effort
+	if ir.Thinking != nil && ir.Thinking.Effort != "" {
+		oa["reasoning_effort"] = ir.Thinking.Effort
+		log.Printf("[effort→] reasoning_effort=%s", ir.Thinking.Effort)
+	}
+
+	return oa
 }
 
-// extractImageURL converts an Anthropic image content block to a data URL.
-func extractImageURL(b map[string]interface{}) string {
-	source, ok := b["source"].(map[string]interface{})
-	if !ok {
-		return ""
+// ============================================================
+// Anthropic Messages 请求 → IR 转换
+// ============================================================
+
+func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
+	ir := &IRRequest{
+		Model:         req.Model,
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		StopSequences: req.StopSequences,
+		Stream:        req.Stream,
 	}
-	switch source["type"] {
-	case "base64":
-		mediaType, _ := source["media_type"].(string)
-		data, _ := source["data"].(string)
-		if mediaType != "" && data != "" {
-			return "data:" + mediaType + ";base64," + data
+
+	// system → system prompt
+	ir.SystemPrompt = extractText(req.System)
+
+	// thinking
+	if req.Thinking != nil && req.Thinking.Type == "enabled" {
+		ir.Thinking = &IRThinking{Enabled: true, BudgetTokens: req.Thinking.BudgetTokens}
+		if req.Thinking.BudgetTokens > 0 && ir.Thinking.Effort == "" {
+			ir.Thinking.Effort = budgetToEffort(req.Thinking.BudgetTokens)
 		}
-	case "url":
-		if url, _ := source["url"].(string); url != "" {
-			return url
+	}
+	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
+		if ir.Thinking == nil {
+			ir.Thinking = &IRThinking{Enabled: true}
+		}
+		ir.Thinking.Effort = req.OutputConfig.Effort
+	}
+
+	// metadata
+	if req.Metadata != nil && req.Metadata.UserID != "" {
+		ir.Metadata = &IRMetadata{UserID: req.Metadata.UserID}
+	}
+
+	// messages
+	for _, m := range req.Messages {
+		msg := IRMessage{Role: m.Role}
+		if blocks, ok := m.Content.([]interface{}); ok {
+			// Separate tool_results from other content.
+			// Anthropic: tool_result is a block inside user message.
+			// IR/OpenAI: tool result must be a separate role:"tool" message.
+			var toolResults []IRMessage
+			for _, block := range blocks {
+				b, ok := block.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				switch b["type"] {
+				case "text":
+					if txt, _ := b["text"].(string); txt != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "text", Text: txt})
+					}
+				case "thinking":
+					if txt, _ := b["thinking"].(string); txt != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "thinking", Thinking: txt})
+					}
+				case "tool_use":
+					input, _ := b["input"].(map[string]interface{})
+					msg.Content = append(msg.Content, IRContentBlock{
+						Type:      "tool_use",
+						ToolUseID: b["id"].(string),
+						ToolName:  b["name"].(string),
+						ToolInput: input,
+					})
+				case "tool_result":
+					toolCallID, _ := b["tool_use_id"].(string)
+					resultContent := ""
+					if c, ok := b["content"].(string); ok {
+						resultContent = c
+					} else if blocks2, ok := b["content"].([]interface{}); ok {
+						resultContent = extractText(blocks2)
+					}
+					toolResults = append(toolResults, IRMessage{
+						Role:       "tool",
+						ToolCallID: toolCallID,
+						Content:    []IRContentBlock{{Type: "text", Text: resultContent}},
+					})
+				case "image":
+					if url := extractImageURL(b); url != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "image", ImageURL: url})
+					}
+				}
+			}
+			// Append user message first (if it has non-tool content).
+			if len(msg.Content) > 0 {
+				ir.Messages = append(ir.Messages, msg)
+			}
+			// Then append tool result messages (must follow immediately).
+			ir.Messages = append(ir.Messages, toolResults...)
+		} else if contentStr, ok := m.Content.(string); ok {
+			msg.Content = []IRContentBlock{{Type: "text", Text: contentStr}}
+			if len(msg.Content) > 0 {
+				ir.Messages = append(ir.Messages, msg)
+			}
 		}
 	}
-	return ""
-}
 
-func mustJSON(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-// --- Mapping helpers ---
-
-func mapFinishReason(r string) string {
-	switch r {
-	case "stop":
-		return "end_turn"
-	case "length":
-		return "max_tokens"
-	case "tool_calls":
-		return "tool_use"
+	// tools
+	for _, t := range req.Tools {
+		ir.Tools = append(ir.Tools, IRTool{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.InputSchema,
+		})
 	}
-	return r
-}
 
-func mapFinishReasonReverse(r string) string {
-	switch r {
-	case "end_turn":
-		return "stop"
-	case "max_tokens":
-		return "length"
-	case "tool_use":
-		return "tool_calls"
+	// tool_choice
+	if req.ToolChoice != nil {
+		tc := &IRToolChoice{}
+		if m, ok := req.ToolChoice.(map[string]interface{}); ok {
+			switch m["type"] {
+			case "auto":
+				tc.Type = "auto"
+			case "any":
+				tc.Type = "required"
+			case "none":
+				tc.Type = "none"
+			case "tool":
+				tc.Type = "specific"
+				tc.Name, _ = m["name"].(string)
+			}
+		}
+		ir.ToolChoice = tc
 	}
-	return r
+
+	return ir
 }
 
-// --- Effort 转换 ---
+// ============================================================
+// IR → Anthropic Messages 请求转换
+// ============================================================
 
-// budgetToEffort 将 Anthropic 的 budget_tokens 转为 effort 字符串。
-func budgetToEffort(budget int) string {
-	switch {
-	case budget <= 0:
-		return "none"
-	case budget <= 2048:
-		return "low"
-	case budget <= 8192:
-		return "medium"
-	default:
-		return "high"
+func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
+	req := &anthropicMsgReq{
+		Model:         ir.Model,
+		MaxTokens:     ir.MaxTokens,
+		Temperature:   ir.Temperature,
+		TopP:          ir.TopP,
+		StopSequences: ir.StopSequences,
+		Stream:        ir.Stream,
 	}
-}
 
-// effortToBudget 将 effort 字符串转为 Anthropic 的 budget_tokens。
-func effortToBudget(effort string) int {
-	switch effort {
-	case "none":
-		return 0
-	case "minimal":
-		return 1024
-	case "low":
-		return 2048
-	case "medium":
-		return 8192
-	case "high", "xhigh", "max", "ultracode":
-		return 32768
-	default:
-		return 8192
+	if ir.SystemPrompt != "" {
+		req.System = ir.SystemPrompt
 	}
-}
 
-// clampEffortForResponses 将 effort 限制在 Responses API 支持范围内。
-func clampEffortForResponses(effort string) string {
-	switch effort {
-	case "none", "minimal", "low", "medium", "high", "xhigh":
-		return effort
-	case "max", "ultracode":
-		return "xhigh"
-	default:
-		return effort
-	}
-}
-
-// clampEffortForAnthropic 将 effort 限制在 Anthropic 支持范围内。
-func clampEffortForAnthropic(effort string) string {
-	switch effort {
-	case "none", "low", "medium", "high":
-		return effort
-	case "minimal":
-		return "low"
-	case "xhigh", "max", "ultracode":
-		return "high"
-	default:
-		return effort
-	}
-}
-
-// --- ID generation ---
-
-var hexCounter uint64
-
-func randomHex(n int) string {
-	counter := atomic.AddUint64(&hexCounter, 1)
-	result := fmt.Sprintf("%x%x", time.Now().UnixNano(), counter)
-	if len(result) < n {
-		return result
-	}
-	return result[:n]
-}
-
-// --- Token estimation ---
-
-func countTokens(req map[string]interface{}) int {
-	body, _ := json.Marshal(req)
-	var ascii, nonASCII int
-	for i := 0; i < len(body); i++ {
-		if body[i] < 128 {
-			ascii++
+	for _, m := range ir.Messages {
+		if m.Role == "assistant" {
+			msg := anthropicMsg{Role: "assistant"}
+			var blocks []interface{}
+			for _, b := range m.Content {
+				switch b.Type {
+				case "text":
+					blocks = append(blocks, map[string]interface{}{"type": "text", "text": b.Text})
+				case "thinking":
+					blocks = append(blocks, map[string]interface{}{"type": "thinking", "thinking": b.Thinking})
+				case "tool_use":
+					blocks = append(blocks, map[string]interface{}{
+						"type": "tool_use", "id": b.ToolUseID, "name": b.ToolName, "input": b.ToolInput,
+					})
+				}
+			}
+			if len(blocks) > 0 {
+				msg.Content = blocks
+				req.Messages = append(req.Messages, msg)
+			}
+		} else if m.Role == "tool" {
+			resultContent := extractText(m.Content)
+			toolResult := map[string]interface{}{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     resultContent,
+			}
+			req.Messages = append(req.Messages, anthropicMsg{
+				Role:    "user",
+				Content: []interface{}{toolResult},
+			})
 		} else {
-			nonASCII++
+			// user message — check for image blocks
+			msg := anthropicMsg{Role: "user"}
+			var blocks []interface{}
+			for _, b := range m.Content {
+				switch b.Type {
+				case "text":
+					blocks = append(blocks, map[string]interface{}{"type": "text", "text": b.Text})
+				case "image":
+					if strings.HasPrefix(b.ImageURL, "data:") {
+						// data URL → base64 source
+						parts := strings.SplitN(b.ImageURL, ",", 2)
+						if len(parts) == 2 {
+							headerParts := strings.SplitN(parts[0], ":", 2)
+							mediaType := ""
+							if len(headerParts) == 2 {
+								mediaType = strings.TrimSuffix(strings.TrimPrefix(headerParts[1], "application/"), ";base64")
+							}
+							blocks = append(blocks, map[string]interface{}{
+								"type": "image",
+								"source": map[string]interface{}{
+									"type":       "base64",
+									"media_type": mediaType,
+									"data":       parts[1],
+								},
+							})
+						}
+					} else {
+						blocks = append(blocks, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type": "url",
+								"url":  b.ImageURL,
+							},
+						})
+					}
+				}
+			}
+			if len(blocks) > 0 {
+				if len(blocks) == 1 {
+					if b, ok := blocks[0].(map[string]interface{}); ok && b["type"] == "text" {
+						msg.Content = b["text"]
+					} else {
+						msg.Content = blocks
+					}
+				} else {
+					msg.Content = blocks
+				}
+				req.Messages = append(req.Messages, msg)
+			}
 		}
 	}
-	return ascii/4 + nonASCII*2/3
+
+	// tools
+	for _, t := range ir.Tools {
+		req.Tools = append(req.Tools, anthropicTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.Parameters,
+		})
+	}
+
+	// tool_choice
+	if ir.ToolChoice != nil {
+		switch ir.ToolChoice.Type {
+		case "auto":
+			req.ToolChoice = map[string]interface{}{"type": "auto"}
+		case "required", "any":
+			req.ToolChoice = map[string]interface{}{"type": "any"}
+		case "none":
+			req.ToolChoice = map[string]interface{}{"type": "none"}
+		case "specific":
+			if ir.ToolChoice.Name != "" {
+				req.ToolChoice = map[string]interface{}{"type": "tool", "name": ir.ToolChoice.Name}
+			}
+		}
+	}
+
+	// thinking
+	if ir.Thinking != nil && ir.Thinking.Enabled {
+		if ir.Thinking.Effort != "" {
+			// 新格式：adaptive thinking + output_config.effort
+			clamped := clampEffortForAnthropic(ir.Thinking.Effort)
+			req.Thinking = &anthropicThinking{Type: "adaptive"}
+			req.OutputConfig = &anthropicOutputCfg{Effort: clamped}
+			if clamped != ir.Thinking.Effort {
+				log.Printf("[effort→] output_config.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+			} else {
+				log.Printf("[effort→] output_config.effort=%s", clamped)
+			}
+		} else if ir.Thinking.BudgetTokens > 0 {
+			// 旧格式：enabled + budget_tokens
+			req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: ir.Thinking.BudgetTokens}
+		} else {
+			req.Thinking = &anthropicThinking{Type: "adaptive"}
+		}
+	}
+
+	// metadata
+	if ir.Metadata != nil && ir.Metadata.UserID != "" {
+		req.Metadata = &anthropicMetadata{UserID: ir.Metadata.UserID}
+	}
+
+	return req
+}
+
+// ============================================================
+// Chat Completions 请求 → IR 转换
+// ============================================================
+
+func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
+	var oa struct {
+		Model       string                   `json:"model"`
+		Messages    []map[string]interface{} `json:"messages"`
+		MaxTokens   int                      `json:"max_tokens"`
+		Temperature *float64                 `json:"temperature,omitempty"`
+		TopP        *float64                 `json:"top_p,omitempty"`
+		Stop        []string                 `json:"stop,omitempty"`
+		Stream      bool                     `json:"stream,omitempty"`
+		Tools       []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string      `json:"name"`
+				Description string      `json:"description,omitempty"`
+				Parameters  interface{} `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools,omitempty"`
+		ToolChoice      interface{} `json:"tool_choice,omitempty"`
+		ResponseFormat  interface{} `json:"response_format,omitempty"`
+		ReasoningEffort string      `json:"reasoning_effort,omitempty"`
+	}
+	if err := json.Unmarshal(body, &oa); err != nil {
+		return nil, err
+	}
+
+	ir := &IRRequest{
+		Model:         oa.Model,
+		MaxTokens:     oa.MaxTokens,
+		Temperature:   oa.Temperature,
+		TopP:          oa.TopP,
+		StopSequences: oa.Stop,
+		Stream:        oa.Stream,
+	}
+
+	if oa.ResponseFormat != nil {
+		ir.Extensions = map[string]interface{}{"response_format": oa.ResponseFormat}
+	}
+
+	for _, m := range oa.Messages {
+		role, _ := m["role"].(string)
+		if role == "system" {
+			ir.SystemPrompt = extractText(m["content"])
+			continue
+		}
+		if role == "tool" {
+			toolCallID, _ := m["tool_call_id"].(string)
+			content, _ := m["content"].(string)
+			ir.Messages = append(ir.Messages, IRMessage{
+				Role:       "tool",
+				ToolCallID: toolCallID,
+				Content:    []IRContentBlock{{Type: "text", Text: content}},
+			})
+			continue
+		}
+		msg := IRMessage{Role: role}
+		if contentStr, ok := m["content"].(string); ok {
+			msg.Content = []IRContentBlock{{Type: "text", Text: contentStr}}
+		} else if contentArr, ok := m["content"].([]interface{}); ok {
+			for _, part := range contentArr {
+				pm, ok := part.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				switch pm["type"] {
+				case "text":
+					if txt, _ := pm["text"].(string); txt != "" {
+						msg.Content = append(msg.Content, IRContentBlock{Type: "text", Text: txt})
+					}
+				case "image_url":
+					if imgURL, ok := pm["image_url"].(map[string]interface{}); ok {
+						if url, _ := imgURL["url"].(string); url != "" {
+							msg.Content = append(msg.Content, IRContentBlock{Type: "image", ImageURL: url})
+						}
+					}
+				}
+			}
+		}
+		// Assistant messages with tool_calls
+		if role == "assistant" {
+			if tcRaw, ok := m["tool_calls"].([]interface{}); ok {
+				for _, t := range tcRaw {
+					tc, ok := t.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					fn, _ := tc["function"].(map[string]interface{})
+					name, _ := fn["name"].(string)
+					args, _ := fn["arguments"].(string)
+					var input map[string]interface{}
+					json.Unmarshal([]byte(args), &input)
+					msg.Content = append(msg.Content, IRContentBlock{
+						Type:      "tool_use",
+						ToolUseID: tc["id"].(string),
+						ToolName:  name,
+						ToolInput: input,
+					})
+				}
+				// reasoning_content
+				if rc, ok := m["reasoning_content"].(string); ok && rc != "" {
+					msg.Content = append([]IRContentBlock{{Type: "thinking", Thinking: rc}}, msg.Content...)
+				}
+			}
+		}
+		if len(msg.Content) > 0 {
+			ir.Messages = append(ir.Messages, msg)
+		}
+	}
+
+	for _, t := range oa.Tools {
+		ir.Tools = append(ir.Tools, IRTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			Parameters:  t.Function.Parameters,
+		})
+	}
+
+	if oa.ToolChoice != nil {
+		tc := &IRToolChoice{}
+		switch v := oa.ToolChoice.(type) {
+		case string:
+			tc.Type = v
+		case map[string]interface{}:
+			if fn, ok := v["function"].(map[string]interface{}); ok {
+				tc.Type = "specific"
+				tc.Name, _ = fn["name"].(string)
+			}
+		}
+		ir.ToolChoice = tc
+	}
+
+	if oa.ReasoningEffort != "" {
+		ir.Thinking = &IRThinking{Enabled: true, Effort: oa.ReasoningEffort}
+	}
+
+	return ir, nil
+}
+
+// ============================================================
+// IR → Chat Completions 响应转换
+// ============================================================
+
+func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
+	msg := map[string]interface{}{"role": "assistant"}
+	var content string
+	var toolCalls []interface{}
+
+	for _, b := range ir.Content {
+		switch b.Type {
+		case "text":
+			content += b.Text
+		case "thinking":
+			msg["reasoning_content"] = b.Thinking
+		case "tool_use":
+			toolCalls = append(toolCalls, map[string]interface{}{
+				"id":   b.ToolUseID,
+				"type": "function",
+				"function": map[string]interface{}{
+					"name":      b.ToolName,
+					"arguments": mustJSON(b.ToolInput),
+				},
+			})
+		}
+	}
+	if content != "" {
+		msg["content"] = content
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+
+	resp := map[string]interface{}{
+		"id": "chatcmpl-" + randomHex(12), "object": "chat.completion", "created": time.Now().Unix(),
+		"model": ir.Model,
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "message": msg, "finish_reason": mapFinishReasonReverse(ir.StopReason),
+		}},
+	}
+	if ir.Usage.InputTokens > 0 || ir.Usage.OutputTokens > 0 {
+		resp["usage"] = map[string]interface{}{
+			"prompt_tokens":     ir.Usage.InputTokens,
+			"completion_tokens": ir.Usage.OutputTokens,
+			"total_tokens":      ir.Usage.InputTokens + ir.Usage.OutputTokens,
+		}
+	}
+	return resp
+}
+
+// ============================================================
+// Chat Completions 响应 → IR 转换
+// ============================================================
+
+func chatCompletionsToIR(body []byte, model string) *IRResponse {
+	var oa struct {
+		ID      string `json:"id"`
+		Choices []struct {
+			Message struct {
+				Role             string `json:"role"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(body, &oa); err != nil {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		msg := "[upstream response parse error]"
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+			msg = errResp.Error.Message
+		}
+		return &IRResponse{
+			ID:         "resp_" + randomHex(12),
+			Model:      model,
+			Role:       "assistant",
+			Content:    []IRContentBlock{{Type: "text", Text: msg}},
+			StopReason: "end_turn",
+		}
+	}
+
+	ir := &IRResponse{
+		ID:    "resp_" + randomHex(12),
+		Model: model,
+		Role:  "assistant",
+	}
+
+	if len(oa.Choices) > 0 {
+		msg := oa.Choices[0].Message
+		if msg.Role != "" {
+			ir.Role = msg.Role
+		}
+		if msg.ReasoningContent != "" {
+			ir.Content = append(ir.Content, IRContentBlock{Type: "thinking", Thinking: msg.ReasoningContent})
+		}
+		if msg.Content != "" {
+			ir.Content = append(ir.Content, IRContentBlock{Type: "text", Text: msg.Content})
+		}
+		for _, tc := range msg.ToolCalls {
+			var input map[string]interface{}
+			json.Unmarshal([]byte(tc.Function.Arguments), &input)
+			ir.Content = append(ir.Content, IRContentBlock{
+				Type:      "tool_use",
+				ToolUseID: tc.ID,
+				ToolName:  tc.Function.Name,
+				ToolInput: input,
+			})
+		}
+		if oa.Choices[0].FinishReason != nil {
+			ir.StopReason = mapFinishReason(*oa.Choices[0].FinishReason)
+		}
+	}
+
+	if oa.Usage != nil {
+		ir.Usage = IRUsage{
+			InputTokens:  oa.Usage.PromptTokens,
+			OutputTokens: oa.Usage.CompletionTokens,
+		}
+	}
+	return ir
+}
+
+// ============================================================
+// Anthropic Messages 响应 → IR 转换
+// ============================================================
+
+func anthropicToIR(body []byte, model string) *IRResponse {
+	var anth struct {
+		ID      string `json:"id"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type     string      `json:"type"`
+			Text     string      `json:"text,omitempty"`
+			Thinking string      `json:"thinking,omitempty"`
+			ID       string      `json:"id,omitempty"`
+			Name     string      `json:"name,omitempty"`
+			Input    interface{} `json:"input,omitempty"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+		Usage      *struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(body, &anth); err != nil {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		msg := "[upstream response parse error]"
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+			msg = errResp.Error.Message
+		}
+		return &IRResponse{
+			ID:         "resp_" + randomHex(12),
+			Model:      model,
+			Role:       "assistant",
+			Content:    []IRContentBlock{{Type: "text", Text: msg}},
+			StopReason: "end_turn",
+		}
+	}
+
+	ir := &IRResponse{
+		ID:         "resp_" + randomHex(12),
+		Model:      model,
+		Role:       "assistant",
+		StopReason: "end_turn",
+	}
+
+	if anth.Role != "" {
+		ir.Role = anth.Role
+	}
+	if anth.StopReason != "" {
+		ir.StopReason = anth.StopReason
+	}
+
+	for _, c := range anth.Content {
+		switch c.Type {
+		case "text":
+			ir.Content = append(ir.Content, IRContentBlock{Type: "text", Text: c.Text})
+		case "thinking":
+			ir.Content = append(ir.Content, IRContentBlock{Type: "thinking", Thinking: c.Thinking})
+		case "tool_use":
+			input, _ := c.Input.(map[string]interface{})
+			ir.Content = append(ir.Content, IRContentBlock{
+				Type:      "tool_use",
+				ToolUseID: c.ID,
+				ToolName:  c.Name,
+				ToolInput: input,
+			})
+		}
+	}
+
+	if anth.Usage != nil {
+		ir.Usage = IRUsage{
+			InputTokens:  anth.Usage.InputTokens,
+			OutputTokens: anth.Usage.OutputTokens,
+		}
+	}
+	return ir
+}
+
+// ============================================================
+// IR → Anthropic Messages 响应转换
+// ============================================================
+
+func irToAnthropicResponse(ir *IRResponse) map[string]interface{} {
+	var contentBlocks []interface{}
+	for _, b := range ir.Content {
+		switch b.Type {
+		case "text":
+			contentBlocks = append(contentBlocks, map[string]interface{}{"type": "text", "text": b.Text})
+		case "thinking":
+			contentBlocks = append(contentBlocks, map[string]interface{}{"type": "thinking", "thinking": b.Thinking})
+		case "tool_use":
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "tool_use", "id": b.ToolUseID, "name": b.ToolName, "input": b.ToolInput,
+			})
+		}
+	}
+	if len(contentBlocks) == 0 {
+		contentBlocks = []interface{}{map[string]interface{}{"type": "text", "text": ""}}
+	}
+
+	stopReason := ir.StopReason
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+
+	// Anthropic 用 msg_ 前缀
+	id := ir.ID
+	if !strings.HasPrefix(id, "msg_") {
+		id = "msg_" + randomHex(16)
+	}
+
+	resp := map[string]interface{}{
+		"id":          id,
+		"type":        "message",
+		"role":        ir.Role,
+		"content":     contentBlocks,
+		"model":       ir.Model,
+		"stop_reason": stopReason,
+	}
+	if ir.Usage.InputTokens > 0 || ir.Usage.OutputTokens > 0 {
+		resp["usage"] = map[string]interface{}{
+			"input_tokens":  ir.Usage.InputTokens,
+			"output_tokens": ir.Usage.OutputTokens,
+		}
+	}
+	return resp
+}
+
+// ============================================================
+// IR → Responses 响应转换
+// ============================================================
+
+// irToResponsesRequest converts IR request to OpenAI Responses API request format.
+func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
+	req := map[string]interface{}{
+		"model":  ir.Model,
+		"stream": ir.Stream,
+	}
+
+	// instructions
+	if ir.SystemPrompt != "" {
+		req["instructions"] = ir.SystemPrompt
+	}
+
+	// input: build InputItem array
+	var input []interface{}
+	for _, m := range ir.Messages {
+		if m.Role == "tool" {
+			// tool result → function_call_output
+			input = append(input, map[string]interface{}{
+				"type":   "function_call_output",
+				"call_id": m.ToolCallID,
+				"output":  extractText(m.Content),
+			})
+			continue
+		}
+		// regular message
+		item := map[string]interface{}{
+			"type": "message",
+			"role": m.Role,
+		}
+		var parts []interface{}
+		for _, b := range m.Content {
+			switch b.Type {
+			case "text":
+				parts = append(parts, map[string]interface{}{"type": "input_text", "text": b.Text})
+			case "image":
+				parts = append(parts, map[string]interface{}{
+					"type":      "input_image",
+					"image_url": b.ImageURL,
+				})
+			}
+		}
+		if len(parts) > 0 {
+			item["content"] = parts
+		}
+		input = append(input, item)
+	}
+	req["input"] = input
+
+	// max_output_tokens
+	if ir.MaxTokens > 0 {
+		req["max_output_tokens"] = ir.MaxTokens
+	}
+	if ir.Temperature != nil {
+		req["temperature"] = *ir.Temperature
+	}
+	if ir.TopP != nil {
+		req["top_p"] = *ir.TopP
+	}
+
+	// tools
+	if len(ir.Tools) > 0 {
+		var tools []interface{}
+		for _, t := range ir.Tools {
+			tools = append(tools, map[string]interface{}{
+				"type":        "function",
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  t.Parameters,
+			})
+		}
+		req["tools"] = tools
+	}
+
+	// tool_choice
+	if ir.ToolChoice != nil {
+		switch ir.ToolChoice.Type {
+		case "auto":
+			req["tool_choice"] = "auto"
+		case "none":
+			req["tool_choice"] = "none"
+		}
+	}
+
+	// reasoning effort
+	if ir.Thinking != nil && ir.Thinking.Effort != "" {
+		clamped := clampEffortForResponses(ir.Thinking.Effort)
+		req["reasoning"] = map[string]interface{}{"effort": clamped}
+		if clamped != ir.Thinking.Effort {
+			log.Printf("[effort→] reasoning.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+		} else {
+			log.Printf("[effort→] reasoning.effort=%s", clamped)
+		}
+	}
+
+	return req
+}
+
+func irToResponses(ir *IRResponse) map[string]interface{} {
+	resp := map[string]interface{}{
+		"id":          ir.ID,
+		"object":      "response",
+		"created_at":  time.Now().Unix(),
+		"model":       ir.Model,
+		"status":      "completed",
+	}
+
+	var output []interface{}
+	var messageContent []interface{}
+
+	for _, b := range ir.Content {
+		switch b.Type {
+		case "thinking":
+			output = append(output, map[string]interface{}{
+				"type":    "reasoning",
+				"id":      "rs_" + randomHex(12),
+				"content": []interface{}{},
+				"summary": []interface{}{},
+			})
+		case "text":
+			messageContent = append(messageContent, map[string]interface{}{
+				"type": "output_text",
+				"text": b.Text,
+				"annotations": []interface{}{},
+			})
+		case "tool_use":
+			// Flush any pending message content first
+			if len(messageContent) > 0 {
+				output = append(output, map[string]interface{}{
+					"type":    "message",
+					"id":      "msg_" + randomHex(12),
+					"role":    "assistant",
+					"content": messageContent,
+					"status":  "completed",
+				})
+				messageContent = nil
+			}
+			output = append(output, map[string]interface{}{
+				"type":      "function_call",
+				"id":        "fc_" + randomHex(12),
+				"call_id":   b.ToolUseID,
+				"name":      b.ToolName,
+				"arguments": mustJSON(b.ToolInput),
+			})
+		}
+	}
+
+	// Flush remaining message content
+	if len(messageContent) > 0 {
+		output = append(output, map[string]interface{}{
+			"type":    "message",
+			"id":      "msg_" + randomHex(12),
+			"role":    "assistant",
+			"content": messageContent,
+			"status":  "completed",
+		})
+	}
+
+	resp["output"] = output
+
+	if ir.Usage.InputTokens > 0 || ir.Usage.OutputTokens > 0 {
+		resp["usage"] = map[string]interface{}{
+			"input_tokens":  ir.Usage.InputTokens,
+			"output_tokens": ir.Usage.OutputTokens,
+			"total_tokens":  ir.Usage.InputTokens + ir.Usage.OutputTokens,
+		}
+	}
+	return resp
 }
