@@ -45,6 +45,7 @@ type anthropicTool struct {
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"` // summarized / omitted
 }
 
 type anthropicMetadata struct {

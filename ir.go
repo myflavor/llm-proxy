@@ -47,14 +47,17 @@ type IRTool struct {
 }
 
 type IRToolChoice struct {
-	Type string // auto / required / none / any / specific
-	Name string // 当 type=specific 时指定函数名
+	Type                   string // auto / required / none / any / specific
+	Name                   string // 当 type=specific 时指定函数名
+	DisableParallelToolUse bool   // 禁止并行工具调用
 }
 
 type IRThinking struct {
 	Enabled      bool
 	BudgetTokens int    // Anthropic 旧格式 budget_tokens
 	Effort       string // 统一 effort 等级：none/minimal/low/medium/high/xhigh/max/ultracode
+	Display      string // summarized / omitted（Anthropic thinking 显示方式）
+	Summary      string // auto / none（OpenAI Responses reasoning.summary）
 }
 
 type IRMetadata struct {

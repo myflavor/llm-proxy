@@ -100,7 +100,7 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 
 	// reasoning
 	if req.Reasoning != nil {
-		ir.Thinking = &IRThinking{Enabled: true, Effort: req.Reasoning.Effort}
+		ir.Thinking = &IRThinking{Enabled: true, Effort: req.Reasoning.Effort, Summary: req.Reasoning.Summary}
 	}
 
 	// text.format → extensions
@@ -285,10 +285,12 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 
 	// thinking
 	if req.Thinking != nil && req.Thinking.Type == "enabled" {
-		ir.Thinking = &IRThinking{Enabled: true, BudgetTokens: req.Thinking.BudgetTokens}
+		ir.Thinking = &IRThinking{Enabled: true, BudgetTokens: req.Thinking.BudgetTokens, Display: req.Thinking.Display}
 		if req.Thinking.BudgetTokens > 0 && ir.Thinking.Effort == "" {
 			ir.Thinking.Effort = budgetToEffort(req.Thinking.BudgetTokens)
 		}
+	} else if req.Thinking != nil && req.Thinking.Type == "adaptive" {
+		ir.Thinking = &IRThinking{Enabled: true, Display: req.Thinking.Display}
 	}
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		if ir.Thinking == nil {
@@ -393,6 +395,9 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 			case "tool":
 				tc.Type = "specific"
 				tc.Name, _ = m["name"].(string)
+			}
+			if v, ok := m["disable_parallel_tool_use"].(bool); ok {
+				tc.DisableParallelToolUse = v
 			}
 		}
 		ir.ToolChoice = tc
@@ -520,26 +525,38 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 
 	// tool_choice
 	if ir.ToolChoice != nil {
+		tc := map[string]interface{}{}
 		switch ir.ToolChoice.Type {
 		case "auto":
-			req.ToolChoice = map[string]interface{}{"type": "auto"}
+			tc["type"] = "auto"
 		case "required", "any":
-			req.ToolChoice = map[string]interface{}{"type": "any"}
+			tc["type"] = "any"
 		case "none":
-			req.ToolChoice = map[string]interface{}{"type": "none"}
+			tc["type"] = "none"
 		case "specific":
 			if ir.ToolChoice.Name != "" {
-				req.ToolChoice = map[string]interface{}{"type": "tool", "name": ir.ToolChoice.Name}
+				tc["type"] = "tool"
+				tc["name"] = ir.ToolChoice.Name
 			}
+		}
+		if ir.ToolChoice.DisableParallelToolUse {
+			tc["disable_parallel_tool_use"] = true
+		}
+		if len(tc) > 0 {
+			req.ToolChoice = tc
 		}
 	}
 
 	// thinking
 	if ir.Thinking != nil && ir.Thinking.Enabled {
+		display := ir.Thinking.Display
+		if display == "" {
+			display = "summarized"
+		}
 		if ir.Thinking.Effort != "" {
 			// 新格式：adaptive thinking + output_config.effort
 			clamped := clampEffortForAnthropic(ir.Thinking.Effort)
-			req.Thinking = &anthropicThinking{Type: "adaptive"}
+			req.Thinking = &anthropicThinking{Type: "adaptive", Display: display}
 			req.OutputConfig = &anthropicOutputCfg{Effort: clamped}
 			if clamped != ir.Thinking.Effort {
 				log.Printf("[effort→] output_config.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
@@ -548,7 +565,7 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 			}
 		} else if ir.Thinking.BudgetTokens > 0 {
 			// 旧格式：enabled + budget_tokens
-			req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: ir.Thinking.BudgetTokens}
+			req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: ir.Thinking.BudgetTokens, Display: display}
 		} else {
 			req.Thinking = &anthropicThinking{Type: "adaptive"}
 		}
@@ -1076,10 +1093,14 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 		}
 	}
 
-	// reasoning effort
+	// reasoning effort + summary
 	if ir.Thinking != nil && ir.Thinking.Effort != "" {
 		clamped := clampEffortForResponses(ir.Thinking.Effort)
-		req["reasoning"] = map[string]interface{}{"effort": clamped}
+		reasoning := map[string]interface{}{"effort": clamped}
+		if ir.Thinking.Summary != "" {
+			reasoning["summary"] = ir.Thinking.Summary
+		}
+		req["reasoning"] = reasoning
 		if clamped != ir.Thinking.Effort {
 			log.Printf("[effort→] reasoning.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
 		} else {
