@@ -66,6 +66,9 @@ func forwardUpstream(w http.ResponseWriter, r *http.Request, url string, apiKey 
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
