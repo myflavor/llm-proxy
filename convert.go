@@ -98,41 +98,6 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 					}},
 				})
 			case "function_call_output":
-				// OpenAI API requires an assistant message with tool_calls before tool results.
-				// Synthesize one if the previous message isn't an assistant with matching tool_call.
-				needSynth := true
-				if len(ir.Messages) > 0 {
-					last := ir.Messages[len(ir.Messages)-1]
-					if last.Role == "assistant" {
-						for _, b := range last.Content {
-							if b.Type == "tool_use" && b.ToolUseID == item.CallID {
-								needSynth = false
-								break
-							}
-						}
-					}
-				}
-				if needSynth {
-					// Synthesize assistant message with tool_calls.
-					// We don't know the exact function name from call_id alone,
-					// so use the first tool as placeholder (OpenAI only needs call_id to match).
-					toolName := "function"
-					for _, t := range req.Tools {
-						if t.Type == "function" {
-							toolName = t.Name
-							break
-						}
-					}
-					ir.Messages = append(ir.Messages, IRMessage{
-						Role: "assistant",
-						Content: []IRContentBlock{{
-							Type:      "tool_use",
-							ToolUseID: item.CallID,
-							ToolName:  toolName,
-							ToolInput: map[string]interface{}{},
-						}},
-					})
-				}
 				ir.Messages = append(ir.Messages, IRMessage{
 					Role:       "tool",
 					ToolCallID: item.CallID,
