@@ -372,10 +372,12 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 					}
 				case "tool_use":
 					input, _ := b["input"].(map[string]interface{})
+					id, _ := b["id"].(string)
+					name, _ := b["name"].(string)
 					msg.Content = append(msg.Content, IRContentBlock{
 						Type:      "tool_use",
-						ToolUseID: b["id"].(string),
-						ToolName:  b["name"].(string),
+						ToolUseID: id,
+						ToolName:  name,
 						ToolInput: input,
 					})
 				case "tool_result":
@@ -668,7 +670,12 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 	for _, m := range oa.Messages {
 		role, _ := m["role"].(string)
 		if role == "system" {
-			ir.SystemPrompt = extractText(m["content"])
+			text := extractText(m["content"])
+			if ir.SystemPrompt != "" && text != "" {
+				ir.SystemPrompt += "\n" + text
+			} else if text != "" {
+				ir.SystemPrompt = text
+			}
 			continue
 		}
 		if role == "tool" {
@@ -706,6 +713,10 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 		}
 		// Assistant messages with tool_calls
 		if role == "assistant" {
+			// reasoning_content (can exist with or without tool_calls)
+			if rc, ok := m["reasoning_content"].(string); ok && rc != "" {
+				msg.Content = append(msg.Content, IRContentBlock{Type: "thinking", Thinking: rc})
+			}
 			if tcRaw, ok := m["tool_calls"].([]interface{}); ok {
 				for _, t := range tcRaw {
 					tc, ok := t.(map[string]interface{})
@@ -724,10 +735,6 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 						ToolName:  name,
 						ToolInput: input,
 					})
-				}
-				// reasoning_content
-				if rc, ok := m["reasoning_content"].(string); ok && rc != "" {
-					msg.Content = append([]IRContentBlock{{Type: "thinking", Thinking: rc}}, msg.Content...)
 				}
 			}
 		}

@@ -629,7 +629,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	var inputTokens, outputTokens int
 	var outputIdx int
 	var reasoningContent strings.Builder
-	var functionCallID, functionCallName, functionCallArgs string
+	var functionCallID, functionCallName, functionCallArgs, functionCallOriginalID string
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -657,7 +657,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			"type": "response.output_item.done", "output_index": outputIdx,
 			"item": map[string]interface{}{
 				"type": "function_call", "id": functionCallID,
-				"call_id": functionCallID, "name": functionCallName, "arguments": functionCallArgs,
+				"call_id": functionCallOriginalID, "name": functionCallName, "arguments": functionCallArgs,
 				"status": "completed",
 			},
 		}); err != nil {
@@ -813,6 +813,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				functionCallID = "fc_" + randomHex(12)
 				functionCallName = toolName
 				functionCallArgs = ""
+				functionCallOriginalID = toolID
 				hasFunctionCall = true
 				if err := emit("response.output_item.added", map[string]interface{}{
 					"type": "response.output_item.added", "output_index": outputIdx,
@@ -980,6 +981,14 @@ func responsesToIRResponse(body []byte, model string) *IRResponse {
 				ToolInput: input,
 			})
 		}
+	}
+
+	// Map upstream status to stop_reason
+	switch resp.Status {
+	case "incomplete":
+		ir.StopReason = "max_tokens"
+	case "failed":
+		ir.StopReason = "end_turn"
 	}
 
 	// If output contains function_call items, set stop reason to tool_use
