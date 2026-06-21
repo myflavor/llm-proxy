@@ -1017,7 +1017,7 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 	var started, isReasoning, hasToolUse bool
 	var inputTokens, outputTokens int
 	var blockIndex int
-	var hasTextBlock, hasThinkingBlock bool
+	var hasTextBlock, hasThinkingBlock, hasToolBlock bool
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -1035,7 +1035,7 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 	}
 
 	closeCurrentBlock := func() error {
-		if hasTextBlock || hasThinkingBlock {
+		if hasTextBlock || hasThinkingBlock || hasToolBlock {
 			if err := emit("content_block_stop", map[string]interface{}{
 				"type": "content_block_stop", "index": blockIndex,
 			}); err != nil {
@@ -1044,6 +1044,7 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 			blockIndex++
 			hasTextBlock = false
 			hasThinkingBlock = false
+			hasToolBlock = false
 		}
 		return nil
 	}
@@ -1110,6 +1111,7 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 				if err := closeCurrentBlock(); err != nil {
 					return err
 				}
+				hasToolBlock = true
 				if err := emit("content_block_start", map[string]interface{}{
 					"type": "content_block_start", "index": blockIndex,
 					"content_block": map[string]interface{}{
@@ -1186,9 +1188,8 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 				}
 				isReasoning = false
 			case "function_call":
-				if err := closeCurrentBlock(); err != nil {
-					return err
-				}
+				// Don't close block here; let response.completed handle it
+				// to avoid resetting hasToolBlock before the final close
 			}
 
 		case "response.completed":
