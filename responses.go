@@ -168,9 +168,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		m["model"] = p.Name
 		rewritten, _ := json.Marshal(m)
-		forwardUpstream(w, r, p.ResponsesURL, p.APIKey, rewritten, map[string]string{
-			"Authorization": "Bearer " + p.APIKey,
-		})
+		forwardUpstream(w, r, p.ResponsesURL, p.APIKey, rewritten, nil)
 		return
 	}
 

@@ -45,7 +45,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		// Rewrite model name and forward.
 		req.Model = p.Name
 		rewritten, _ := json.Marshal(req)
-		forwardUpstream(w, r, p.MessagesURL, p.APIKey, rewritten, map[string]string{
+		forwardUpstream(w, r, p.MessagesURL, "", rewritten, map[string]string{
 			"x-api-key":         p.APIKey,
 			"anthropic-version": "2023-06-01",
 		})
