@@ -71,7 +71,7 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 							continue
 						}
 						switch part.Type {
-						case "input_text":
+						case "input_text", "output_text":
 							msg.Content = append(msg.Content, IRContentBlock{Type: "text", Text: part.Text})
 						case "input_image":
 							msg.Content = append(msg.Content, IRContentBlock{Type: "image", ImageURL: part.ImageURL})
