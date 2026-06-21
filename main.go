@@ -80,7 +80,7 @@ func main() {
 	sig := <-sigCh
 	log.Printf("\n%s received, shutting down...", sig)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
 	log.Println("server stopped")

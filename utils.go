@@ -18,6 +18,7 @@ type anthropicMsgReq struct {
 	MaxTokens     int                 `json:"max_tokens"`
 	Temperature   *float64            `json:"temperature,omitempty"`
 	TopP          *float64            `json:"top_p,omitempty"`
+	TopK          *int                `json:"top_k,omitempty"`
 	StopSequences []string            `json:"stop_sequences,omitempty"`
 	Stream        bool                `json:"stream,omitempty"`
 	Tools         []anthropicTool     `json:"tools,omitempty"`
@@ -107,6 +108,9 @@ func extractImageURL(b map[string]interface{}) string {
 }
 
 func mustJSON(v interface{}) string {
+	if v == nil {
+		return "{}"
+	}
 	b, _ := json.Marshal(v)
 	return string(b)
 }
@@ -141,6 +145,8 @@ func mapFinishReasonReverse(r string) string {
 		return "stop"
 	case "refusal":
 		return "content_filter"
+	case "incomplete":
+		return "length"
 	}
 	return r
 }

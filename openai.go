@@ -17,7 +17,8 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 
 	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
 	var started bool
-	var toolCallID, toolCallName string
+	toolBlocks := map[string]int{} // Anthropic content_block index → OpenAI tool_call index
+	var nextToolIdx int
 
 	for scanner.Scan() {
 		select {
@@ -63,11 +64,16 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 			cb, _ := event["content_block"].(map[string]interface{})
 			cbType, _ := cb["type"].(string)
 			if cbType == "tool_use" {
-				toolCallID, _ = cb["id"].(string)
-				toolCallName, _ = cb["name"].(string)
+				idx, _ := event["index"].(float64)
+			 blockIdx := int(idx)
+				toolIdx := nextToolIdx
+				nextToolIdx++
+				toolBlocks[fmt.Sprintf("%d", blockIdx)] = toolIdx
+				toolCallID, _ := cb["id"].(string)
+				toolCallName, _ := cb["name"].(string)
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
 					"tool_calls": []interface{}{map[string]interface{}{
-						"index": 0, "type": "function", "id": toolCallID,
+						"index": toolIdx, "type": "function", "id": toolCallID,
 						"function": map[string]interface{}{"name": toolCallName, "arguments": ""},
 					}},
 				}, nil)
@@ -90,10 +96,13 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 				thinking, _ := delta["thinking"].(string)
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"reasoning_content": thinking}, nil)
 			case "input_json_delta":
+				idx, _ := event["index"].(float64)
+			 blockIdx := int(idx)
+				toolIdx := toolBlocks[fmt.Sprintf("%d", blockIdx)]
 				partialJSON, _ := delta["partial_json"].(string)
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
 					"tool_calls": []interface{}{map[string]interface{}{
-						"index": 0, "type": "function",
+						"index": toolIdx, "type": "function",
 						"function": map[string]interface{}{"arguments": partialJSON},
 					}},
 				}, nil)
@@ -309,6 +318,11 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		irResp := responsesToIRResponse(resBody, req.Model)
 		openaiResp := irToChatCompletionsResponse(irResp)
 		writeJSON(w, resp.StatusCode, openaiResp)
+
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": map[string]interface{}{"message": "unsupported provider type", "type": "server_error"},
+		})
 	}
 }
 
@@ -318,7 +332,8 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 	var started, isReasoning bool
 	var inputTokens, outputTokens int
 	var hasToolCalls bool
-	var toolID, toolName string
+	toolCallIdx := map[int]int{} // Responses output_index → OpenAI tool_call index
+	var nextToolIdx int
 
 	scanner := newSSEScanner(upstream)
 
@@ -371,11 +386,15 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 				isReasoning = false
 			case "function_call":
 				hasToolCalls = true
-				toolID, _ = item["call_id"].(string)
-				toolName, _ = item["name"].(string)
+				callID, _ := item["call_id"].(string)
+				toolName, _ := item["name"].(string)
+				outputIdx, _ := event["output_index"].(float64)
+				toolIdx := nextToolIdx
+				nextToolIdx++
+				toolCallIdx[int(outputIdx)] = toolIdx
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
 					"tool_calls": []interface{}{map[string]interface{}{
-						"index": 0, "type": "function", "id": toolID,
+						"index": toolIdx, "type": "function", "id": callID,
 						"function": map[string]interface{}{"name": toolName, "arguments": ""},
 					}},
 				}, nil)
@@ -399,10 +418,12 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 				continue
 			}
 			delta, _ := event["delta"].(string)
+			outputIdx, _ := event["output_index"].(float64)
+			toolIdx := toolCallIdx[int(outputIdx)]
 			if delta != "" {
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{
 					"tool_calls": []interface{}{map[string]interface{}{
-						"index": 0, "type": "function",
+						"index": toolIdx, "type": "function",
 						"function": map[string]interface{}{"arguments": delta},
 					}},
 				}, nil)
@@ -420,8 +441,11 @@ func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w
 			}
 			ensureStarted()
 			finishReason := "stop"
+			respStatus, _ := respData["status"].(string)
 			if hasToolCalls {
 				finishReason = "tool_calls"
+			} else if respStatus == "incomplete" {
+				finishReason = "length"
 			}
 			chunk := map[string]interface{}{
 				"id": chunkID, "object": "chat.completion.chunk", "created": time.Now().Unix(),

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,7 +68,7 @@ func authMiddleware(next http.Handler) http.Handler {
 			})
 			return
 		}
-		if key != serverAPIKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(serverAPIKey)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]interface{}{
 				"error": map[string]interface{}{"message": "invalid API key", "type": "auth_error"},
 			})
@@ -88,7 +89,7 @@ func logMiddleware(next http.Handler) http.Handler {
 				log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
 				// Only write error response if headers haven't been sent yet
 				if !rw.headerWritten {
-					writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+					writeJSON(rw, http.StatusInternalServerError, map[string]interface{}{
 						"error": map[string]interface{}{"message": fmt.Sprintf("internal error: %v", rec), "type": "server_error"},
 					})
 					rw.status = 500

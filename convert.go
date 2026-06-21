@@ -161,6 +161,7 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		oa["stream_options"] = map[string]interface{}{"include_usage": true}
 	}
 	if ir.MaxTokens > 0 {
+		oa["max_tokens"] = ir.MaxTokens
 		oa["max_completion_tokens"] = ir.MaxTokens
 	}
 	if ir.Temperature != nil {
@@ -315,6 +316,7 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 		MaxTokens:     maxTokens,
 		Temperature:   req.Temperature,
 		TopP:          req.TopP,
+		TopK:          req.TopK,
 		StopSequences: req.StopSequences,
 		Stream:        req.Stream,
 	}
@@ -382,6 +384,7 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 					})
 				case "tool_result":
 					toolCallID, _ := b["tool_use_id"].(string)
+					isErr, _ := b["is_error"].(bool)
 					resultContent := ""
 					if c, ok := b["content"].(string); ok {
 						resultContent = c
@@ -391,7 +394,7 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 					toolResults = append(toolResults, IRMessage{
 						Role:       "tool",
 						ToolCallID: toolCallID,
-						Content:    []IRContentBlock{{Type: "text", Text: resultContent}},
+						Content:    []IRContentBlock{{Type: "text", Text: resultContent, IsError: isErr}},
 					})
 				case "image":
 					if url := extractImageURL(b); url != "" {
@@ -457,6 +460,7 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 		MaxTokens:     ir.MaxTokens,
 		Temperature:   ir.Temperature,
 		TopP:          ir.TopP,
+		TopK:          ir.TopK,
 		StopSequences: ir.StopSequences,
 		Stream:        ir.Stream,
 	}
@@ -497,6 +501,13 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 				"type":        "tool_result",
 				"tool_use_id": m.ToolCallID,
 				"content":     resultContent,
+			}
+			// Preserve is_error flag if present
+			for _, b := range m.Content {
+				if b.IsError {
+					toolResult["is_error"] = true
+					break
+				}
 			}
 			req.Messages = append(req.Messages, anthropicMsg{
 				Role:    "user",
@@ -669,7 +680,7 @@ func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 
 	for _, m := range oa.Messages {
 		role, _ := m["role"].(string)
-		if role == "system" {
+		if role == "system" || role == "developer" {
 			text := extractText(m["content"])
 			if ir.SystemPrompt != "" && text != "" {
 				ir.SystemPrompt += "\n" + text
@@ -801,6 +812,8 @@ func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
 	}
 	if content != "" {
 		msg["content"] = content
+	} else if len(toolCalls) > 0 {
+		msg["content"] = nil // spec requires null for tool-call-only responses
 	}
 	if len(reasoningParts) > 0 {
 		msg["reasoning_content"] = strings.Join(reasoningParts, "")
@@ -1035,6 +1048,13 @@ func irToAnthropicResponse(ir *IRResponse) map[string]interface{} {
 	if stopReason == "" {
 		stopReason = "end_turn"
 	}
+	// Map non-Anthropic stop reasons to valid ones
+	switch stopReason {
+	case "refusal":
+		stopReason = "end_turn"
+	case "incomplete":
+		stopReason = "max_tokens"
+	}
 
 	// Anthropic 用 msg_ 前缀
 	id := ir.ID
@@ -1043,12 +1063,13 @@ func irToAnthropicResponse(ir *IRResponse) map[string]interface{} {
 	}
 
 	resp := map[string]interface{}{
-		"id":          id,
-		"type":        "message",
-		"role":        ir.Role,
-		"content":     contentBlocks,
-		"model":       ir.Model,
-		"stop_reason": stopReason,
+		"id":            id,
+		"type":          "message",
+		"role":          ir.Role,
+		"content":       contentBlocks,
+		"model":         ir.Model,
+		"stop_reason":   stopReason,
+		"stop_sequence": nil,
 	}
 	if ir.Usage.InputTokens > 0 || ir.Usage.OutputTokens > 0 {
 		resp["usage"] = map[string]interface{}{

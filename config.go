@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -101,6 +102,9 @@ func loadConfig(path string) error {
 			return fmt.Errorf("unknown provider type %q for model %s (expected openai/anthropic/responses)", entry.Provider, entry.Name)
 		}
 
+		if _, exists := providersByModel[entry.Name]; exists {
+			log.Printf("WARNING: duplicate model name %q, overwriting previous entry", entry.Name)
+		}
 		providersByModel[entry.Name] = p
 		providerList = append(providerList, p)
 	}

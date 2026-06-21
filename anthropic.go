@@ -45,6 +45,13 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		// Rewrite model name and forward.
 		req.Model = p.Name
 		rewritten, _ := json.Marshal(req)
+		if len(p.ExtraParams) > 0 {
+			var m map[string]interface{}
+			if err := json.Unmarshal(rewritten, &m); err == nil && m != nil {
+				applyExtraParams(m, p.ExtraParams)
+				rewritten, _ = json.Marshal(m)
+			}
+		}
 		forwardUpstream(w, r, p.MessagesURL, "", rewritten, map[string]string{
 			"x-api-key":         p.APIKey,
 			"anthropic-version": "2023-06-01",
@@ -174,6 +181,11 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		irResp := chatCompletionsToIR(resBody, req.Model)
 		anthResp := irToAnthropicResponse(irResp)
 		writeJSON(w, resp.StatusCode, anthResp)
+
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": map[string]interface{}{"message": "unsupported provider type", "type": "server_error"},
+		})
 	}
 }
 

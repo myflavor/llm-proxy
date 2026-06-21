@@ -11,6 +11,7 @@ var (
 	providerList     []*Provider
 	serverAPIKey     string // empty = no auth required
 	serverPort       string // listen port, default "5000"
+	startedAt        = time.Now().Unix()     // fixed timestamp for model listing
 )
 
 var httpClient = &http.Client{Timeout: 10 * time.Minute}
@@ -32,7 +33,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 		models = append(models, map[string]interface{}{
 			"id":       p.ModelName,
 			"object":   "model",
-			"created":  time.Now().Unix(),
+			"created":  startedAt,
 			"owned_by": string(p.Type),
 		})
 	}

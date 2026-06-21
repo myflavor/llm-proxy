@@ -13,6 +13,7 @@ type IRRequest struct {
 	MaxTokens     int
 	Temperature   *float64
 	TopP          *float64
+	TopK          *int
 	StopSequences []string
 	Stream        bool
 	Tools         []IRTool
@@ -38,6 +39,7 @@ type IRContentBlock struct {
 	ToolUseID string                 // tool_use 的 ID
 	ToolName  string                 // tool_use 的函数名
 	ToolInput map[string]interface{} // tool_use 的参数
+	IsError   bool                   // tool_result 是否为错误
 }
 
 type IRTool struct {

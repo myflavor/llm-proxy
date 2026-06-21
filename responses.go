@@ -600,11 +600,15 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			if err := closeAll(); err != nil {
 				return err
 			}
+			status := "completed"
+			if choice.FinishReason != nil && *choice.FinishReason == "length" {
+				status = "incomplete"
+			}
 			return emit("response.completed", map[string]interface{}{
 				"type": "response.completed",
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
-					"model": model, "status": "completed",
+					"model": model, "status": status,
 					"output": []interface{}{},
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
@@ -630,6 +634,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	var outputIdx int
 	var reasoningContent strings.Builder
 	var functionCallID, functionCallName, functionCallArgs, functionCallOriginalID string
+	var anthStopReason string
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -895,6 +900,11 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 					outputTokens = int(v)
 				}
 			}
+			if delta, ok := event["delta"].(map[string]interface{}); ok {
+				if sr, ok := delta["stop_reason"].(string); ok {
+					anthStopReason = sr
+				}
+			}
 
 		case "message_stop":
 			if err := ensureStarted(); err != nil {
@@ -910,11 +920,15 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			if err := flushFunctionCall(); err != nil {
 				return err
 			}
+			status := "completed"
+			if anthStopReason == "max_tokens" {
+				status = "incomplete"
+			}
 			return emit("response.completed", map[string]interface{}{
 				"type": "response.completed",
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
-					"model": model, "status": "completed",
+					"model": model, "status": status,
 					"output": []interface{}{},
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
@@ -1215,6 +1229,10 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 			stopReason := "end_turn"
 			if hasToolUse {
 				stopReason = "tool_use"
+			}
+			// Check upstream status for incomplete responses
+			if respStatus, ok := respData["status"].(string); ok && respStatus == "incomplete" {
+				stopReason = "max_tokens"
 			}
 			if err := emit("message_delta", map[string]interface{}{
 				"type": "message_delta",
