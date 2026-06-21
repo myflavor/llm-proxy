@@ -1087,6 +1087,41 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 			})
 			continue
 		}
+		// Check for tool_use blocks in assistant messages → function_call items
+		if m.Role == "assistant" {
+			hasToolUse := false
+			for _, b := range m.Content {
+				if b.Type == "tool_use" {
+					hasToolUse = true
+					input = append(input, map[string]interface{}{
+						"type":      "function_call",
+						"id":        b.ToolUseID,
+						"call_id":   b.ToolUseID,
+						"name":      b.ToolName,
+						"arguments": mustJSON(b.ToolInput),
+					})
+				}
+			}
+			if hasToolUse {
+				// Also emit text content as a message if present
+				var textParts []string
+				for _, b := range m.Content {
+					if b.Type == "text" {
+						textParts = append(textParts, b.Text)
+					}
+				}
+				if len(textParts) > 0 {
+					input = append(input, map[string]interface{}{
+						"type": "message",
+						"role": "assistant",
+						"content": []interface{}{
+							map[string]interface{}{"type": "output_text", "text": strings.Join(textParts, "")},
+						},
+					})
+				}
+				continue
+			}
+		}
 		// regular message
 		item := map[string]interface{}{
 			"type": "message",
