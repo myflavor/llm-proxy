@@ -326,7 +326,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 	var outputIdx int
 	var inputTokens, outputTokens int
 	var reasoningContent strings.Builder
-	var pendingToolID, pendingToolName, pendingToolCallID string // deferred close for function_call items
+	var pendingToolID, pendingToolName, pendingToolCallID, pendingToolArgs string // deferred close for function_call items
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -405,7 +405,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"type": "response.output_item.done", "output_index": outputIdx,
 				"item": map[string]interface{}{
 					"type": "function_call", "id": pendingToolID,
-					"call_id": pendingToolCallID, "name": pendingToolName, "arguments": "",
+					"call_id": pendingToolCallID, "name": pendingToolName, "arguments": pendingToolArgs,
 					"status": "completed",
 				},
 			}); err != nil {
@@ -415,6 +415,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			pendingToolID = ""
 			pendingToolName = ""
 			pendingToolCallID = ""
+			pendingToolArgs = ""
 		}
 		return nil
 	}
@@ -569,6 +570,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				pendingToolID = "fc_" + randomHex(12)
 				pendingToolName = tc.Function.Name
 				pendingToolCallID = tc.ID
+				pendingToolArgs = ""
 				if err := emit("response.output_item.added", map[string]interface{}{
 					"type": "response.output_item.added", "output_index": outputIdx,
 					"item": map[string]interface{}{
@@ -580,6 +582,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				}
 			}
 			if tc.Function.Arguments != "" {
+				pendingToolArgs += tc.Function.Arguments
 				if err := emit("response.function_call_arguments.delta", map[string]interface{}{
 					"type": "response.function_call_arguments.delta", "output_index": outputIdx,
 					"delta": tc.Function.Arguments,
@@ -626,7 +629,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	var inputTokens, outputTokens int
 	var outputIdx int
 	var reasoningContent strings.Builder
-	var functionCallID, functionCallName string
+	var functionCallID, functionCallName, functionCallArgs string
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -654,7 +657,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			"type": "response.output_item.done", "output_index": outputIdx,
 			"item": map[string]interface{}{
 				"type": "function_call", "id": functionCallID,
-				"call_id": functionCallID, "name": functionCallName, "arguments": "",
+				"call_id": functionCallID, "name": functionCallName, "arguments": functionCallArgs,
 				"status": "completed",
 			},
 		}); err != nil {
@@ -662,6 +665,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 		}
 		outputIdx++
 		hasFunctionCall = false
+		functionCallArgs = ""
 		return nil
 	}
 
@@ -808,6 +812,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				toolName, _ := cb["name"].(string)
 				functionCallID = "fc_" + randomHex(12)
 				functionCallName = toolName
+				functionCallArgs = ""
 				hasFunctionCall = true
 				if err := emit("response.output_item.added", map[string]interface{}{
 					"type": "response.output_item.added", "output_index": outputIdx,
@@ -852,6 +857,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			case "input_json_delta":
 				partialJSON, _ := delta["partial_json"].(string)
 				if partialJSON != "" {
+					functionCallArgs += partialJSON
 					if err := emit("response.function_call_arguments.delta", map[string]interface{}{
 						"type": "response.function_call_arguments.delta", "output_index": outputIdx,
 						"delta": partialJSON,
