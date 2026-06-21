@@ -34,11 +34,13 @@ type responsesReq struct {
 }
 
 type responsesInputItem struct {
-	Type    string      `json:"type"` // "message", "function_call_output"
-	Role    string      `json:"role,omitempty"`
-	Content interface{} `json:"content,omitempty"` // string or []responsesContentPart
-	CallID  string      `json:"call_id,omitempty"` // for function_call_output
-	Output  string      `json:"output,omitempty"`  // for function_call_output
+	Type      string      `json:"type"` // "message", "function_call", "function_call_output"
+	Role      string      `json:"role,omitempty"`
+	Content   interface{} `json:"content,omitempty"` // string or []responsesContentPart
+	CallID    string      `json:"call_id,omitempty"` // for function_call and function_call_output
+	Output    string      `json:"output,omitempty"`  // for function_call_output
+	Name      string      `json:"name,omitempty"`     // for function_call
+	Arguments string      `json:"arguments,omitempty"` // for function_call (JSON string)
 }
 
 type responsesContentPart struct {

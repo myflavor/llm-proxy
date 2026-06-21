@@ -81,6 +81,22 @@ func responsesToIR(body []byte) (*IRRequest, error) {
 				if len(msg.Content) > 0 {
 					ir.Messages = append(ir.Messages, msg)
 				}
+			case "function_call":
+				// Codex sends function_call items from previous response in the input.
+				// Convert to assistant message with tool_use content.
+				var input map[string]interface{}
+				if item.Arguments != "" {
+					json.Unmarshal([]byte(item.Arguments), &input)
+				}
+				ir.Messages = append(ir.Messages, IRMessage{
+					Role: "assistant",
+					Content: []IRContentBlock{{
+						Type:      "tool_use",
+						ToolUseID: item.CallID,
+						ToolName:  item.Name,
+						ToolInput: input,
+					}},
+				})
 			case "function_call_output":
 				// OpenAI API requires an assistant message with tool_calls before tool results.
 				// Synthesize one if the previous message isn't an assistant with matching tool_call.
