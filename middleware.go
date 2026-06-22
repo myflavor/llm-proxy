@@ -47,8 +47,9 @@ func authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Health and CORS bypass auth.
-		if urlPath(r.URL.Path) == "/health" || r.Method == http.MethodOptions {
+		// Health, models, and CORS bypass auth.
+		path := urlPath(r.URL.Path)
+		if path == "/health" || path == "/v1/models" || path == "/models" || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}

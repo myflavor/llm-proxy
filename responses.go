@@ -318,6 +318,38 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 // 流式转换：Chat Completions SSE → Responses SSE
 // ============================================================
 
+// buildOutput constructs the output array for response.completed events.
+type completedToolCall struct {
+	callID, name, args string
+}
+
+func buildOutput(reasoningText, textContent string, toolCalls []completedToolCall, reasoningID, msgID string) []interface{} {
+	var output []interface{}
+	if reasoningText != "" {
+		output = append(output, map[string]interface{}{
+			"type": "reasoning", "id": reasoningID,
+			"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasoningText}},
+			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoningText}},
+			"status":  "completed",
+		})
+	}
+	if textContent != "" {
+		output = append(output, map[string]interface{}{
+			"type": "message", "id": msgID, "role": "assistant",
+			"content": []interface{}{map[string]interface{}{"type": "output_text", "text": textContent, "annotations": []interface{}{}}},
+			"status":  "completed",
+		})
+	}
+	for _, tc := range toolCalls {
+		output = append(output, map[string]interface{}{
+			"type": "function_call", "id": "fc_" + randomHex(12),
+			"call_id": tc.callID, "name": tc.name, "arguments": tc.args,
+			"status": "completed",
+		})
+	}
+	return output
+}
+
 func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	respID := "resp_" + randomHex(12)
 	msgID := "msg_" + randomHex(12)
@@ -326,7 +358,9 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 	var outputIdx int
 	var inputTokens, outputTokens int
 	var reasoningContent strings.Builder
+	var textContent strings.Builder
 	var pendingToolID, pendingToolName, pendingToolCallID, pendingToolArgs string // deferred close for function_call items
+	var completedToolCalls []completedToolCall
 
 	emit := func(event string, data interface{}) error {
 		return emitSSE(w, flusher, event, data)
@@ -386,7 +420,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"type": "response.output_item.done", "output_index": outputIdx,
 				"item": map[string]interface{}{
 					"type": "message", "id": msgID, "role": "assistant",
-					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
+					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": textContent.String(), "annotations": []interface{}{}}},
 					"status": "completed",
 				},
 			}); err != nil {
@@ -411,6 +445,9 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			}); err != nil {
 				return err
 			}
+			completedToolCalls = append(completedToolCalls, completedToolCall{
+				callID: pendingToolCallID, name: pendingToolName, args: pendingToolArgs,
+			})
 			outputIdx++
 			pendingToolID = ""
 			pendingToolName = ""
@@ -454,7 +491,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": "completed",
-					"output": []interface{}{},
+					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -545,6 +582,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 					return err
 				}
 			}
+			textContent.WriteString(choice.Delta.Content)
 			if err := emit("response.output_text.delta", map[string]interface{}{
 				"type": "response.output_text.delta", "output_index": outputIdx, "content_index": 0,
 				"delta": choice.Delta.Content,
@@ -609,7 +647,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": status,
-					"output": []interface{}{},
+					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -633,6 +671,8 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	var inputTokens, outputTokens int
 	var outputIdx int
 	var reasoningContent strings.Builder
+	var textContent strings.Builder
+	var completedToolCalls []completedToolCall
 	var functionCallID, functionCallName, functionCallArgs, functionCallOriginalID string
 	var anthStopReason string
 
@@ -668,6 +708,9 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 		}); err != nil {
 			return err
 		}
+		completedToolCalls = append(completedToolCalls, completedToolCall{
+			callID: functionCallOriginalID, name: functionCallName, args: functionCallArgs,
+		})
 		outputIdx++
 		hasFunctionCall = false
 		functionCallArgs = ""
@@ -711,7 +754,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				"type": "response.output_item.done", "output_index": outputIdx,
 				"item": map[string]interface{}{
 					"type": "message", "id": msgID, "role": "assistant",
-					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}}},
+					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": textContent.String(), "annotations": []interface{}{}}},
 					"status": "completed",
 				},
 			}); err != nil {
@@ -852,6 +895,9 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				}
 			case "text_delta":
 				text, _ := delta["text"].(string)
+				if text != "" {
+					textContent.WriteString(text)
+				}
 				if text != "" && hasMessage {
 					if err := emit("response.output_text.delta", map[string]interface{}{
 						"type": "response.output_text.delta", "output_index": outputIdx, "content_index": 0,
@@ -929,7 +975,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": status,
-					"output": []interface{}{},
+					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
