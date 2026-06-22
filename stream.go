@@ -43,21 +43,16 @@ func streamPassthrough(w http.ResponseWriter, resp *http.Response) {
 	}
 }
 
-// startSSEStream sets response headers for an SSE stream.
-func startSSEStream(w http.ResponseWriter, statusCode int) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	http.NewResponseController(w).SetWriteDeadline(time.Time{})
-	w.WriteHeader(statusCode)
-}
-
 // setupSSEStream initializes SSE streaming response
 func setupSSEStream(w http.ResponseWriter, statusCode int) (http.Flusher, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return nil, fmt.Errorf("streaming not supported")
 	}
-	startSSEStream(w, statusCode)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	w.WriteHeader(statusCode)
 	return flusher, nil
 }
 
