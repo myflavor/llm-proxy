@@ -72,8 +72,8 @@ func authMiddleware(next http.Handler) http.Handler {
 
 		// Check Authorization: Bearer <key> (OpenAI style)
 		key := ""
-		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			key = strings.TrimPrefix(auth, "Bearer ")
+		if auth := r.Header.Get(headerAuthorization); strings.HasPrefix(auth, authBearerPrefix) {
+			key = strings.TrimPrefix(auth, authBearerPrefix)
 		}
 		// Also check x-api-key header (Anthropic style)
 		if key == "" {
@@ -106,9 +106,7 @@ func logMiddleware(next http.Handler) http.Handler {
 				log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
 				// Only write error response if headers haven't been sent yet
 				if !rw.headerWritten {
-					writeJSON(rw, http.StatusInternalServerError, map[string]interface{}{
-						"error": map[string]interface{}{"message": fmt.Sprintf("internal error: %v", rec), "type": "server_error"},
-					})
+					writeError(rw, http.StatusInternalServerError, fmt.Sprintf("internal error: %v", rec))
 					rw.status = 500
 				}
 			}
@@ -135,7 +133,7 @@ func setCORS(w http.ResponseWriter) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }

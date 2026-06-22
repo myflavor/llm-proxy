@@ -14,11 +14,11 @@ import (
 
 // streamPassthrough copies an upstream response to the client, supporting SSE.
 func streamPassthrough(w http.ResponseWriter, resp *http.Response) {
-	contentType := resp.Header.Get("Content-Type")
+	contentType := resp.Header.Get(headerContentType)
 	if contentType == "" {
-		contentType = "application/json"
+		contentType = contentTypeJSON
 	}
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set(headerContentType, contentType)
 	w.Header().Set("Cache-Control", "no-cache")
 
 	if flusher, ok := w.(http.Flusher); ok {
@@ -49,7 +49,7 @@ func setupSSEStream(w http.ResponseWriter, statusCode int) (http.Flusher, error)
 	if !ok {
 		return nil, fmt.Errorf("streaming not supported")
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(headerContentType, contentTypeSSE)
 	w.Header().Set("Cache-Control", "no-cache")
 	http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(statusCode)
@@ -70,9 +70,9 @@ func forwardUpstream(w http.ResponseWriter, r *http.Request, url string, apiKey 
 		writeProxyError(w, r, err)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, contentTypeJSON)
 	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set(headerAuthorization, authBearerPrefix+apiKey)
 	}
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)

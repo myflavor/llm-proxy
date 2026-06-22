@@ -212,7 +212,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			writeProxyError(w, r, err)
 			return
 		}
-		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set(headerContentType, contentTypeJSON)
 		req2.Header.Set("x-api-key", p.APIKey)
 		req2.Header.Set("anthropic-version", anthropicAPIVersion)
 
@@ -234,9 +234,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		if ir.Stream {
 			flusher, err := setupSSEStream(w, resp.StatusCode)
 			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-					"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-				})
+				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 
@@ -266,9 +264,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		applyExtraParams(responsesReq, p.ExtraParams)
 		responsesBody, err := json.Marshal(responsesReq)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-			})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -278,8 +274,8 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			writeProxyError(w, r, err)
 			return
 		}
-		req2.Header.Set("Content-Type", "application/json")
-		req2.Header.Set("Authorization", "Bearer "+p.APIKey)
+		req2.Header.Set(headerContentType, contentTypeJSON)
+		req2.Header.Set(headerAuthorization, authBearerPrefix+p.APIKey)
 
 		resp, err := httpClient.Do(req2)
 		if err != nil {
@@ -299,9 +295,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		if ir.Stream {
 			flusher, err := setupSSEStream(w, resp.StatusCode)
 			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-					"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-				})
+				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 
@@ -318,9 +312,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp.StatusCode, openaiResp)
 
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]interface{}{"message": "unsupported provider type", "type": "server_error"},
-		})
+		writeError(w, http.StatusInternalServerError, "unsupported provider type")
 	}
 }
 

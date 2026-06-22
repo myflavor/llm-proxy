@@ -3,9 +3,19 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
+)
+
+// HTTP constants
+const (
+	authBearerPrefix    = "Bearer "
+	headerContentType   = "Content-Type"
+	headerAuthorization = "Authorization"
+	contentTypeJSON     = "application/json"
+	contentTypeSSE      = "text/event-stream"
 )
 
 // --- Anthropic request types ---
@@ -191,6 +201,16 @@ func clampEffortForAnthropic(effort string) string {
 	default:
 		return effort
 	}
+}
+
+// writeError writes a standardized error response
+func writeError(w http.ResponseWriter, statusCode int, message string) {
+	writeJSON(w, statusCode, map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    "server_error",
+		},
+	})
 }
 
 // --- ID generation ---

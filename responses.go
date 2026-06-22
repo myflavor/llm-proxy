@@ -195,9 +195,7 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 	applyExtraParams(oaReq, p.ExtraParams)
 	oaBody, err := json.Marshal(oaReq)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-		})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -207,8 +205,8 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 		writeProxyError(w, r, err)
 		return
 	}
-	req2.Header.Set("Content-Type", "application/json")
-	req2.Header.Set("Authorization", "Bearer "+p.APIKey)
+	req2.Header.Set(headerContentType, contentTypeJSON)
+	req2.Header.Set(headerAuthorization, authBearerPrefix+p.APIKey)
 
 	resp, err := httpClient.Do(req2)
 	if err != nil {
@@ -228,9 +226,7 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 	if ir.Stream {
 		flusher, err := setupSSEStream(w, resp.StatusCode)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-			})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -252,9 +248,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 	anthReq := irToAnthropicRequest(ir)
 	anthBody, err := json.Marshal(anthReq)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-		})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if len(p.ExtraParams) > 0 {
@@ -271,7 +265,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 		writeProxyError(w, r, err)
 		return
 	}
-	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set(headerContentType, contentTypeJSON)
 	req2.Header.Set("x-api-key", p.APIKey)
 	req2.Header.Set("anthropic-version", anthropicAPIVersion)
 
@@ -293,9 +287,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 	if ir.Stream {
 		flusher, err := setupSSEStream(w, resp.StatusCode)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
-			})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
