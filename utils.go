@@ -206,6 +206,13 @@ func randomHex(n int) string {
 	return result[:n]
 }
 
+// ID generation helpers - standardized ID formats and lengths
+func newMessageID() string          { return "msg_" + randomHex(16) }
+func newResponseID() string         { return "resp_" + randomHex(12) }
+func newFunctionCallID() string     { return "fc_" + randomHex(12) }
+func newReasoningID() string        { return "rs_" + randomHex(12) }
+func newChatCompletionID() string   { return "chatcmpl-" + randomHex(12) }
+
 // --- Token estimation ---
 
 func countTokens(req map[string]interface{}) int {

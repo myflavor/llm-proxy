@@ -15,7 +15,7 @@ import (
 func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
 	scanner := newSSEScanner(upstream)
 
-	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
+	chunkID := newChatCompletionID()
 	var started bool
 	toolBlocks := map[string]int{} // Anthropic content_block index → OpenAI tool_call index
 	var nextToolIdx int
@@ -232,14 +232,13 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if ir.Stream {
-			flusher, ok := w.(http.Flusher)
-			if !ok {
+			flusher, err := setupSSEStream(w, resp.StatusCode)
+			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-					"error": map[string]interface{}{"message": "streaming not supported", "type": "server_error"},
+					"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
 				})
 				return
 			}
-			startSSEStream(w, resp.StatusCode)
 
 			if err := translateAnthropicToOpenAIStream(ctx, resp.Body, w, flusher, req.Model); err != nil {
 				return
@@ -328,7 +327,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 
 // translateResponsesToOpenAIStream translates Responses SSE → OpenAI Chat Completions SSE.
 func translateResponsesToOpenAIStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
-	chunkID := fmt.Sprintf("chatcmpl-%s", randomHex(12))
+	chunkID := newChatCompletionID()
 	var started, isReasoning bool
 	var inputTokens, outputTokens int
 	var hasToolCalls bool

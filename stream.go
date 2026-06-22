@@ -51,6 +51,16 @@ func startSSEStream(w http.ResponseWriter, statusCode int) {
 	w.WriteHeader(statusCode)
 }
 
+// setupSSEStream initializes SSE streaming response
+func setupSSEStream(w http.ResponseWriter, statusCode int) (http.Flusher, error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return nil, fmt.Errorf("streaming not supported")
+	}
+	startSSEStream(w, statusCode)
+	return flusher, nil
+}
+
 // newSSEScanner creates a scanner tuned for SSE line parsing.
 func newSSEScanner(r io.Reader) *bufio.Scanner {
 	s := bufio.NewScanner(r)
@@ -98,7 +108,7 @@ func emitSSE(w io.Writer, flusher http.Flusher, event string, data interface{}) 
 
 // translateStream translates OpenAI SSE → Anthropic SSE.
 func translateStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string, inputTokens int) error {
-	msgID := "msg_" + randomHex(16)
+	msgID := newMessageID()
 	var started, stopped bool
 	var outputTokens int
 

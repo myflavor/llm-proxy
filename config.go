@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -55,6 +56,27 @@ type Provider struct {
 	ModelName    string                 // 客户端使用的模型名
 }
 
+// validateModelEntry validates a model configuration entry
+func validateModelEntry(entry ModelEntry) error {
+	if entry.Name == "" {
+		return fmt.Errorf("model name cannot be empty")
+	}
+	if entry.Model == "" {
+		return fmt.Errorf("model %q: upstream model name cannot be empty", entry.Name)
+	}
+	if entry.BaseURL == "" {
+		return fmt.Errorf("model %q: base_url cannot be empty", entry.Name)
+	}
+	if _, err := url.Parse(entry.BaseURL); err != nil {
+		return fmt.Errorf("model %q: invalid base_url: %w", entry.Name, err)
+	}
+	// If api_key is provided as empty string, reject it
+	if key, ok := entry.ExtraParams["api_key"].(string); ok && key == "" {
+		return fmt.Errorf("model %q: api_key cannot be empty string", entry.Name)
+	}
+	return nil
+}
+
 // loadConfig reads and parses the YAML config file.
 // Supports ${ENV_VAR} substitution in api_key fields.
 func loadConfig(path string) error {
@@ -77,6 +99,10 @@ func loadConfig(path string) error {
 	}
 
 	for _, entry := range cfg.Models {
+		if err := validateModelEntry(entry); err != nil {
+			return err
+		}
+
 		providerType := ProviderType(entry.Provider)
 		baseURL := strings.TrimRight(entry.BaseURL, "/")
 

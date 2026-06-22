@@ -226,14 +226,13 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 	}
 
 	if ir.Stream {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
+		flusher, err := setupSSEStream(w, resp.StatusCode)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": map[string]interface{}{"message": "streaming not supported", "type": "server_error"},
+				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
 			})
 			return
 		}
-		startSSEStream(w, resp.StatusCode)
 
 		if err := translateChatCompletionsToResponsesStream(ctx, resp.Body, w, flusher, ir.Model); err != nil {
 			return
@@ -292,14 +291,13 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 	}
 
 	if ir.Stream {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
+		flusher, err := setupSSEStream(w, resp.StatusCode)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": map[string]interface{}{"message": "streaming not supported", "type": "server_error"},
+				"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
 			})
 			return
 		}
-		startSSEStream(w, resp.StatusCode)
 
 		if err := translateAnthropicToResponsesStream(ctx, resp.Body, w, flusher, ir.Model); err != nil {
 			return
@@ -342,7 +340,7 @@ func buildOutput(reasoningText, textContent string, toolCalls []completedToolCal
 	}
 	for _, tc := range toolCalls {
 		output = append(output, map[string]interface{}{
-			"type": "function_call", "id": "fc_" + randomHex(12),
+			"type": "function_call", "id": newFunctionCallID(),
 			"call_id": tc.callID, "name": tc.name, "arguments": tc.args,
 			"status": "completed",
 		})
@@ -351,9 +349,9 @@ func buildOutput(reasoningText, textContent string, toolCalls []completedToolCal
 }
 
 func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
-	respID := "resp_" + randomHex(12)
-	msgID := "msg_" + randomHex(12)
-	reasoningID := "rs_" + randomHex(12)
+	respID := newResponseID()
+	msgID := newMessageID()
+	reasoningID := newReasoningID()
 	var started, hasReasoning, hasMessage, hasContentPart bool
 	var outputIdx int
 	var inputTokens, outputTokens int
@@ -400,7 +398,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 		}
 		outputIdx++
 		hasReasoning = false
-		reasoningID = "rs_" + randomHex(12)
+		reasoningID = newReasoningID()
 		reasoningContent.Reset()
 		return nil
 	}
@@ -428,7 +426,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 			}
 			outputIdx++
 			hasMessage = false
-			msgID = "msg_" + randomHex(12)
+			msgID = newMessageID()
 		}
 		return nil
 	}
@@ -605,7 +603,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				if err := flushReasoning(); err != nil {
 					return err
 				}
-				pendingToolID = "fc_" + randomHex(12)
+				pendingToolID = newFunctionCallID()
 				pendingToolName = tc.Function.Name
 				pendingToolCallID = tc.ID
 				pendingToolArgs = ""
@@ -664,9 +662,9 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 // ============================================================
 
 func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
-	respID := "resp_" + randomHex(12)
-	msgID := "msg_" + randomHex(12)
-	reasoningID := "rs_" + randomHex(12)
+	respID := newResponseID()
+	msgID := newMessageID()
+	reasoningID := newReasoningID()
 	var started, hasReasoning, hasMessage, hasContentPart, hasFunctionCall bool
 	var inputTokens, outputTokens int
 	var outputIdx int
@@ -734,7 +732,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 		}
 		outputIdx++
 		hasReasoning = false
-		reasoningID = "rs_" + randomHex(12)
+		reasoningID = newReasoningID()
 		reasoningContent.Reset()
 		return nil
 	}
@@ -762,7 +760,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 			}
 			outputIdx++
 			hasMessage = false
-			msgID = "msg_" + randomHex(12)
+			msgID = newMessageID()
 		}
 		return nil
 	}
@@ -858,7 +856,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				}
 				toolID, _ := cb["id"].(string)
 				toolName, _ := cb["name"].(string)
-				functionCallID = "fc_" + randomHex(12)
+				functionCallID = newFunctionCallID()
 				functionCallName = toolName
 				functionCallArgs = ""
 				functionCallOriginalID = toolID
@@ -996,7 +994,7 @@ func responsesToIRResponse(body []byte, model string) *IRResponse {
 	var resp responsesResp
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return &IRResponse{
-			ID:         "resp_" + randomHex(12),
+			ID:         newResponseID(),
 			Model:      model,
 			Role:       "assistant",
 			Content:    []IRContentBlock{{Type: "text", Text: "[upstream response parse error]"}},
@@ -1073,7 +1071,7 @@ func responsesToIRResponse(body []byte, model string) *IRResponse {
 // ============================================================
 
 func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader, w io.Writer, flusher http.Flusher, model string) error {
-	msgID := "msg_" + randomHex(16)
+	msgID := newMessageID()
 	var started, isReasoning, hasToolUse bool
 	var inputTokens, outputTokens int
 	var blockIndex int

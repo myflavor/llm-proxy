@@ -823,7 +823,7 @@ func irToChatCompletionsResponse(ir *IRResponse) map[string]interface{} {
 	}
 
 	resp := map[string]interface{}{
-		"id": "chatcmpl-" + randomHex(12), "object": "chat.completion", "created": time.Now().Unix(),
+		"id": newChatCompletionID(), "object": "chat.completion", "created": time.Now().Unix(),
 		"model": ir.Model,
 		"choices": []interface{}{map[string]interface{}{
 			"index": 0, "message": msg, "finish_reason": mapFinishReasonReverse(ir.StopReason),
@@ -879,7 +879,7 @@ func chatCompletionsToIR(body []byte, model string) *IRResponse {
 			msg = errResp.Error.Message
 		}
 		return &IRResponse{
-			ID:         "resp_" + randomHex(12),
+			ID:         newResponseID(),
 			Model:      model,
 			Role:       "assistant",
 			Content:    []IRContentBlock{{Type: "text", Text: msg}},
@@ -888,7 +888,7 @@ func chatCompletionsToIR(body []byte, model string) *IRResponse {
 	}
 
 	ir := &IRResponse{
-		ID:    "resp_" + randomHex(12),
+		ID:    newResponseID(),
 		Model: model,
 		Role:  "assistant",
 	}
@@ -966,7 +966,7 @@ func anthropicToIR(body []byte, model string) *IRResponse {
 			msg = errResp.Error.Message
 		}
 		return &IRResponse{
-			ID:         "resp_" + randomHex(12),
+			ID:         newResponseID(),
 			Model:      model,
 			Role:       "assistant",
 			Content:    []IRContentBlock{{Type: "text", Text: msg}},
@@ -975,7 +975,7 @@ func anthropicToIR(body []byte, model string) *IRResponse {
 	}
 
 	ir := &IRResponse{
-		ID:         "resp_" + randomHex(12),
+		ID:         newResponseID(),
 		Model:      model,
 		Role:       "assistant",
 		StopReason: "end_turn",
@@ -1059,7 +1059,7 @@ func irToAnthropicResponse(ir *IRResponse) map[string]interface{} {
 	// Anthropic 用 msg_ 前缀
 	id := ir.ID
 	if !strings.HasPrefix(id, "msg_") {
-		id = "msg_" + randomHex(16)
+		id = newMessageID()
 	}
 
 	resp := map[string]interface{}{
@@ -1248,7 +1248,7 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 			if len(messageContent) > 0 {
 				output = append(output, map[string]interface{}{
 					"type":    "message",
-					"id":      "msg_" + randomHex(12),
+					"id":      newMessageID(),
 					"role":    "assistant",
 					"content": messageContent,
 					"status":  "completed",
@@ -1267,7 +1267,7 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 			}
 			output = append(output, map[string]interface{}{
 				"type":    "reasoning",
-				"id":      "rs_" + randomHex(12),
+				"id":      newReasoningID(),
 				"content": reasoningContent,
 				"summary": reasoningSummary,
 			})
@@ -1282,7 +1282,7 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 			if len(messageContent) > 0 {
 				output = append(output, map[string]interface{}{
 					"type":    "message",
-					"id":      "msg_" + randomHex(12),
+					"id":      newMessageID(),
 					"role":    "assistant",
 					"content": messageContent,
 					"status":  "completed",
@@ -1291,7 +1291,7 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 			}
 			output = append(output, map[string]interface{}{
 				"type":      "function_call",
-				"id":        "fc_" + randomHex(12),
+				"id":        newFunctionCallID(),
 				"call_id":   b.ToolUseID,
 				"name":      b.ToolName,
 				"arguments": mustJSON(b.ToolInput),
@@ -1303,7 +1303,7 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 	if len(messageContent) > 0 {
 		output = append(output, map[string]interface{}{
 			"type":    "message",
-			"id":      "msg_" + randomHex(12),
+			"id":      newMessageID(),
 			"role":    "assistant",
 			"content": messageContent,
 			"status":  "completed",

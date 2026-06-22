@@ -11,6 +11,22 @@ import (
 	"time"
 )
 
+// Public endpoints that bypass authentication
+var publicPaths = []string{
+	"/health",
+	"/v1/models",
+	"/models",
+}
+
+func isPublicPath(path string) bool {
+	for _, p := range publicPaths {
+		if path == p {
+			return true
+		}
+	}
+	return false
+}
+
 // responseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
@@ -49,7 +65,7 @@ func authMiddleware(next http.Handler) http.Handler {
 		}
 		// Health, models, and CORS bypass auth.
 		path := urlPath(r.URL.Path)
-		if path == "/health" || path == "/v1/models" || path == "/models" || r.Method == http.MethodOptions {
+		if isPublicPath(path) || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
