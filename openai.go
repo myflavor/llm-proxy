@@ -214,7 +214,7 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		}
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("x-api-key", p.APIKey)
-		req2.Header.Set("anthropic-version", "2023-06-01")
+		req2.Header.Set("anthropic-version", anthropicAPIVersion)
 
 		resp, err := httpClient.Do(req2)
 		if err != nil {

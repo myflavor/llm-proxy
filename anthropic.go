@@ -54,7 +54,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		}
 		forwardUpstream(w, r, p.MessagesURL, "", rewritten, map[string]string{
 			"x-api-key":         p.APIKey,
-			"anthropic-version": "2023-06-01",
+			"anthropic-version": anthropicAPIVersion,
 		})
 
 	case ProviderResponses:

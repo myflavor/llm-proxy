@@ -10,6 +10,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Anthropic API version for all requests
+const anthropicAPIVersion = "2023-06-01"
+
 // Config represents the YAML configuration file.
 type Config struct {
 	Server ServerConfig `yaml:"server"`
