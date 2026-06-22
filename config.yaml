@@ -1,6 +1,7 @@
 server:
   port: "5000"
   api_key: "sk-xin"
+  timeout_minutes: 10  # HTTP client timeout in minutes (default: 10)
 
 models:
   # OpenCode Zen free models

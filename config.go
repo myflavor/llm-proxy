@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,8 +23,9 @@ type Config struct {
 
 // ServerConfig holds server-level settings.
 type ServerConfig struct {
-	Port   string `yaml:"port"`    // listen port, default "5000"
-	APIKey string `yaml:"api_key"`
+	Port           string `yaml:"port"`            // listen port, default "5000"
+	APIKey         string `yaml:"api_key"`
+	TimeoutMinutes int    `yaml:"timeout_minutes"` // HTTP client timeout in minutes, default 10
 }
 
 // ModelEntry is a single model definition in the config.
@@ -137,6 +140,13 @@ func loadConfig(path string) error {
 		providersByModel[entry.Name] = p
 		providerList = append(providerList, p)
 	}
+
+	// Initialize HTTP client with configured timeout
+	timeoutMinutes := cfg.Server.TimeoutMinutes
+	if timeoutMinutes <= 0 {
+		timeoutMinutes = 10 // default 10 minutes
+	}
+	httpClient = &http.Client{Timeout: time.Duration(timeoutMinutes) * time.Minute}
 
 	return nil
 }

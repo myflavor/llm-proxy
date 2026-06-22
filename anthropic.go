@@ -86,7 +86,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
-			errBody, _ := io.ReadAll(resp.Body)
+			errBody := readErrorBody(resp.Body, "upstream error")
 			writeJSON(w, resp.StatusCode, map[string]interface{}{
 				"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 			})
@@ -145,7 +145,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
-			errBody, _ := io.ReadAll(resp.Body)
+			errBody := readErrorBody(resp.Body, "upstream error")
 			writeJSON(w, resp.StatusCode, map[string]interface{}{
 				"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 			})

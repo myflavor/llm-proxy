@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -211,6 +213,16 @@ func writeError(w http.ResponseWriter, statusCode int, message string) {
 			"type":    "server_error",
 		},
 	})
+}
+
+// readErrorBody reads response body and logs if error occurs
+func readErrorBody(body io.Reader, context string) []byte {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		log.Printf("ERROR: failed to read %s body: %v", context, err)
+		return nil
+	}
+	return data
 }
 
 // --- ID generation ---

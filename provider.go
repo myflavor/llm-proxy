@@ -12,9 +12,8 @@ var (
 	serverAPIKey     string // empty = no auth required
 	serverPort       string // listen port, default "5000"
 	startedAt        = time.Now().Unix()     // fixed timestamp for model listing
+	httpClient       *http.Client            // initialized with configured timeout
 )
-
-var httpClient = &http.Client{Timeout: 10 * time.Minute}
 
 // getProvider looks up a provider by model name.
 func getProvider(modelName string) (*Provider, error) {
