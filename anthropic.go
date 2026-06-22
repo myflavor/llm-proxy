@@ -12,7 +12,7 @@ import (
 func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 
-	body, err := readBody(r)
+	body, err := readRequestBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error": map[string]interface{}{"message": err.Error(), "type": "invalid_request_error"},
@@ -86,7 +86,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
-			errBody := readErrorBody(resp.Body, "upstream error")
+			errBody := readResponseBody(resp.Body, "upstream error")
 			writeJSON(w, resp.StatusCode, map[string]interface{}{
 				"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 			})
@@ -145,7 +145,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
-			errBody := readErrorBody(resp.Body, "upstream error")
+			errBody := readResponseBody(resp.Body, "upstream error")
 			writeJSON(w, resp.StatusCode, map[string]interface{}{
 				"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 			})

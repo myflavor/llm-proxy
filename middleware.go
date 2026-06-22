@@ -160,7 +160,7 @@ func extractUpstreamError(body []byte) string {
 	return string(body)
 }
 
-func readBody(r *http.Request) ([]byte, error) {
+func readRequestBody(r *http.Request) ([]byte, error) {
 	const maxBody = 32 * 1024 * 1024
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil {

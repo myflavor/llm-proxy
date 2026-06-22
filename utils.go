@@ -215,8 +215,8 @@ func writeError(w http.ResponseWriter, statusCode int, message string) {
 	})
 }
 
-// readErrorBody reads response body and logs if error occurs
-func readErrorBody(body io.Reader, context string) []byte {
+// readResponseBody reads response body and logs if error occurs
+func readResponseBody(body io.Reader, context string) []byte {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		log.Printf("ERROR: failed to read %s body: %v", context, err)
