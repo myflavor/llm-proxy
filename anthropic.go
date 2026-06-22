@@ -159,14 +159,13 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if ir.Stream {
-			flusher, ok := w.(http.Flusher)
-			if !ok {
+			flusher, err := setupSSEStream(w, resp.StatusCode)
+			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-					"error": map[string]interface{}{"message": "streaming not supported", "type": "server_error"},
+					"error": map[string]interface{}{"message": err.Error(), "type": "server_error"},
 				})
 				return
 			}
-			startSSEStream(w, resp.StatusCode)
 
 			inputTokens := countTokens(oaReq)
 			if err := translateStream(ctx, resp.Body, w, flusher, req.Model, inputTokens); err != nil {
