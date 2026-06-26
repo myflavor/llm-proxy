@@ -295,8 +295,13 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 
 	// reasoning_effort (OpenAI standard)
 	if ir.Thinking != nil && ir.Thinking.Effort != "" && ir.Thinking.Effort != "none" {
-		oa["reasoning_effort"] = ir.Thinking.Effort
-		log.Printf("[effort→] reasoning_effort=%s", ir.Thinking.Effort)
+		clamped := clampEffortForChatCompletions(ir.Thinking.Effort)
+		oa["reasoning_effort"] = clamped
+		if clamped != ir.Thinking.Effort {
+			log.Printf("[effort→] reasoning_effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+		} else {
+			log.Printf("[effort→] reasoning_effort=%s", clamped)
+		}
 	}
 
 	return oa

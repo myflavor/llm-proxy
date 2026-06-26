@@ -179,6 +179,20 @@ func budgetToEffort(budget int) string {
 	}
 }
 
+// clampEffortForChatCompletions 将 effort 限制在 Chat Completions API 支持范围内。
+func clampEffortForChatCompletions(effort string) string {
+	switch effort {
+	case "low", "medium", "high", "xhigh":
+		return effort
+	case "minimal":
+		return "low"
+	case "max", "ultracode":
+		return "xhigh"
+	default:
+		return effort
+	}
+}
+
 // clampEffortForResponses 将 effort 限制在 Responses API 支持范围内。
 func clampEffortForResponses(effort string) string {
 	switch effort {
