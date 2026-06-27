@@ -48,7 +48,9 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		if len(p.ExtraParams) > 0 {
 			var m map[string]interface{}
 			if err := json.Unmarshal(rewritten, &m); err == nil && m != nil {
-				applyExtraParams(m, p.ExtraParams)
+				if len(p.ExtraParams) > 0 {
+					applyExtraParams(m, p.ExtraParams)
+				}
 				rewritten, _ = json.Marshal(m)
 			}
 		}
@@ -60,6 +62,10 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	case ProviderResponses:
 		// Convert Anthropic request → IR → Responses format.
 		ir := anthropicToIRRequest(req)
+		if p.DropParams {
+			ir.Thinking = nil
+			ir.ToolChoice = nil
+		}
 		ir.Model = p.Name
 		responsesReq := irToResponsesRequest(ir)
 		applyExtraParams(responsesReq, p.ExtraParams)

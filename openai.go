@@ -196,6 +196,10 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ir.Model = p.Name
+		if p.DropParams {
+			ir.Thinking = nil
+			ir.ToolChoice = nil
+		}
 		anthReq := irToAnthropicRequest(ir)
 		anthBody, _ := json.Marshal(anthReq)
 		if len(p.ExtraParams) > 0 {
@@ -260,6 +264,10 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ir.Model = p.Name
+		if p.DropParams {
+			ir.Thinking = nil
+			ir.ToolChoice = nil
+		}
 		responsesReq := irToResponsesRequest(ir)
 		applyExtraParams(responsesReq, p.ExtraParams)
 		responsesBody, err := json.Marshal(responsesReq)

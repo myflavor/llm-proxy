@@ -190,6 +190,10 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider, ir *IRRequest) {
+	if p.DropParams {
+		ir.Thinking = nil
+		ir.ToolChoice = nil
+	}
 	ir.Model = p.Name
 	oaReq := irToChatCompletions(ir)
 	applyExtraParams(oaReq, p.ExtraParams)
@@ -244,6 +248,10 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 }
 
 func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provider, ir *IRRequest) {
+	if p.DropParams {
+		ir.Thinking = nil
+		ir.ToolChoice = nil
+	}
 	ir.Model = p.Name
 	anthReq := irToAnthropicRequest(ir)
 	anthBody, err := json.Marshal(anthReq)
