@@ -407,12 +407,15 @@ func anthropicToIRRequest(req anthropicMsgReq) *IRRequest {
 					}
 				}
 			}
-			// Append user message first (if it has non-tool content).
+			// Append tool result messages first — they must immediately follow
+			// the preceding assistant tool_use. OpenAI/DeepSeek reject a tool_calls
+			// assistant message if any other role (incl. a user text message) is
+			// inserted between it and the matching role:tool responses.
+			ir.Messages = append(ir.Messages, toolResults...)
+			// Then append the user message's non-tool content (e.g. text), if any.
 			if len(msg.Content) > 0 {
 				ir.Messages = append(ir.Messages, msg)
 			}
-			// Then append tool result messages (must follow immediately).
-			ir.Messages = append(ir.Messages, toolResults...)
 		} else if contentStr, ok := m.Content.(string); ok {
 			msg.Content = []IRContentBlock{{Type: "text", Text: contentStr}}
 			if len(msg.Content) > 0 {
