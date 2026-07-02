@@ -64,12 +64,12 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("llm-proxy listening on http://0.0.0.0:%s", port)
 		if serverAPIKey != "" {
 			log.Printf("auth: enabled (server.api_key is set)")
 		} else {
 			log.Printf("auth: disabled (server.api_key is empty)")
 		}
+		log.Printf("llm-proxy listening on http://0.0.0.0:%s", port)
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
