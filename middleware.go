@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+// formatBytes returns a human-readable byte count (e.g. "256B", "1.2KB", "3.4MB").
+func formatBytes(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%dB", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+	}
+}
+
 // Public endpoints that bypass authentication
 var publicPaths = []string{
 	"/health",
@@ -28,11 +40,12 @@ func isPublicPath(path string) bool {
 	return false
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code.
+// responseWriter wraps http.ResponseWriter to capture status code and bytes written.
 type responseWriter struct {
 	http.ResponseWriter
 	status        int
 	headerWritten bool
+	bytesWritten  int64
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
@@ -47,7 +60,9 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	if !rw.headerWritten {
 		rw.WriteHeader(http.StatusOK)
 	}
-	return rw.ResponseWriter.Write(b)
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytesWritten += int64(n)
+	return n, err
 }
 
 // Flush implements http.Flusher by delegating to the underlying writer.
@@ -102,10 +117,7 @@ func logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: 200, headerWritten: false}
 
-		log.Printf("%s %s", r.Method, urlPath(r.URL.Path))
-
-		// Build a request context for bug reporting: a unique request ID plus the
-		// original inbound body. Tee the body so handlers still read it normally.
+		// Build a request context: read body first so we can log its size.
 		rc := &requestContext{
 			ID:        newRequestID(),
 			StartTime: start,
@@ -124,6 +136,8 @@ func logMiddleware(next http.Handler) http.Handler {
 		}
 		r = r.WithContext(withRequestContext(r.Context(), rc))
 
+		log.Printf("%s %s %s", r.Method, rc.Path, formatBytes(int64(len(rc.ClientBody))))
+
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
@@ -133,7 +147,7 @@ func logMiddleware(next http.Handler) http.Handler {
 					rw.status = 500
 				}
 			}
-			log.Printf("  [response] %d %s", rw.status, time.Since(start).Round(time.Millisecond))
+			log.Printf("  [response] %d %s %s", rw.status, time.Since(start).Round(time.Millisecond), formatBytes(rw.bytesWritten))
 			if rc.Report != nil {
 				if fname := saveBugReport(rc.Report); fname != "" {
 					log.Printf("  [bugreport] %s", fname)
