@@ -133,7 +133,7 @@ func logMiddleware(next http.Handler) http.Handler {
 					rw.status = 500
 				}
 			}
-			log.Printf("  → %d %s", rw.status, time.Since(start).Round(time.Millisecond))
+			log.Printf("  [response] %d %s", rw.status, time.Since(start).Round(time.Millisecond))
 			if rc.Report != nil {
 				if fname := saveBugReport(rc.Report); fname != "" {
 					log.Printf("  [bugreport] %s", fname)
