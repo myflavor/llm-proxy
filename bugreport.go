@@ -28,7 +28,7 @@ type requestContext struct {
 	OutboundURL  string // upstream URL the proxy is calling
 	OutboundBody []byte // converted request body sent upstream
 	Model        string
-	BugReportID  string // set by saveBugReport if a report was written
+	Report       *BugReport // built by writeBugReport, saved by logMiddleware after request
 }
 
 func newRequestID() string {
@@ -57,7 +57,7 @@ func requestContextFrom(ctx context.Context) *requestContext {
 }
 
 // setOutbound stashes the about-to-be-sent upstream URL/body/model on the
-// requestContext so writeProxyError can record a bug report if the request
+// requestContext so writeBugReport can record a bug report if the request
 // fails at the transport level.
 func setOutbound(ctx context.Context, model, url string, body []byte) {
 	if rc := requestContextFrom(ctx); rc != nil {
@@ -82,15 +82,16 @@ type BugReport struct {
 	UpstreamError  json.RawMessage `json:"upstream_error,omitempty"`
 }
 
-// writeBugReport is the single entry point. It pulls all context from the
-// requestContext in ctx, filters by status, then builds and saves the report.
+// writeBugReport builds a BugReport from the request context and stores it on
+// rc.Report. The actual file I/O happens later in logMiddleware's defer (after
+// the request completes), so the handler never blocks on disk writes.
+//
 // Only statuses that indicate real proxy/upstream bugs are recorded:
 //   - 400, 422  — bad/invalid request (conversion bug or model fault)
 //   - >= 500    — upstream/internal server error
 //   - 0         — transport failure (httpClient.Do returned err)
 //
-// Client/environment errors (401/403/404/429 etc.) are excluded — the caller
-// already knows about them from the response.
+// Client/environment errors (401/403/404/429 etc.) are excluded.
 func writeBugReport(ctx context.Context, status int, upstreamErr []byte, note string) {
 	if !bugReportEnabled {
 		return
@@ -103,15 +104,7 @@ func writeBugReport(ctx context.Context, status int, upstreamErr []byte, note st
 		return
 	}
 
-	report := buildBugReport(rc, status, upstreamErr, note)
-	if saveBugReport(report) {
-		rc.BugReportID = report.RequestID
-	}
-}
-
-// buildBugReport assembles a BugReport from the request context.
-func buildBugReport(rc *requestContext, status int, upstreamErr []byte, note string) BugReport {
-	return BugReport{
+	report := BugReport{
 		RequestID:       rc.ID,
 		Timestamp:       time.Now().Format(time.RFC3339Nano),
 		Method:          rc.Method,
@@ -124,28 +117,30 @@ func buildBugReport(rc *requestContext, status int, upstreamErr []byte, note str
 		OutboundRequest: asJSONRaw(rc.OutboundBody),
 		UpstreamError:   asJSONRaw(upstreamErr),
 	}
+	rc.Report = &report
 }
 
-// saveBugReport writes a BugReport to bugreports/ with a unique UUID filename.
-// Returns true on success.
-func saveBugReport(report BugReport) bool {
+// saveBugReport writes a BugReport to bugreports/<uuid>.json.
+// Returns the filename, or empty on error.
+func saveBugReport(report *BugReport) string {
 	dir := "bugreports"
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("[bugreport] mkdir %s failed: %v", dir, err)
-		return false
+		return ""
 	}
 
-	fpath := filepath.Join(dir, report.RequestID+".json")
+	fname := report.RequestID + ".json"
+	fpath := filepath.Join(dir, fname)
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		log.Printf("[bugreport] marshal failed: %v", err)
-		return false
+		return ""
 	}
 	if err := os.WriteFile(fpath, data, 0644); err != nil {
 		log.Printf("[bugreport] write %s failed: %v", fpath, err)
-		return false
+		return ""
 	}
-	return true
+	return fname
 }
 
 // asJSONRaw returns b as a json.RawMessage if valid JSON, else wraps as JSON

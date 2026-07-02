@@ -132,8 +132,10 @@ func logMiddleware(next http.Handler) http.Handler {
 				}
 			}
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
-			if rc.BugReportID != "" {
-				log.Printf("[bugreport] %s.json", rc.BugReportID)
+			if rc.Report != nil {
+				if fname := saveBugReport(rc.Report); fname != "" {
+					log.Printf("[bugreport] %s", fname)
+				}
 			}
 		}()
 
