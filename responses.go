@@ -204,6 +204,7 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 	}
 
 	ctx := r.Context()
+	setOutbound(ctx, ir.Model, p.ChatURL, oaBody)
 	req2, err := http.NewRequestWithContext(ctx, "POST", p.ChatURL, bytes.NewReader(oaBody))
 	if err != nil {
 		writeProxyError(w, r, err)
@@ -221,6 +222,7 @@ func handleResponsesToOpenAI(w http.ResponseWriter, r *http.Request, p *Provider
 
 	if resp.StatusCode >= 400 {
 		errBody := readResponseBody(resp.Body, "upstream error")
+		writeBugReport(ctx, resp.StatusCode, errBody, "upstream error (Responses→OpenAI path)")
 		writeJSON(w, resp.StatusCode, map[string]interface{}{
 			"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 		})
@@ -268,6 +270,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 	}
 
 	ctx := r.Context()
+	setOutbound(ctx, ir.Model, p.MessagesURL, anthBody)
 	req2, err := http.NewRequestWithContext(ctx, "POST", p.MessagesURL, bytes.NewReader(anthBody))
 	if err != nil {
 		writeProxyError(w, r, err)
@@ -286,6 +289,7 @@ func handleResponsesToAnthropic(w http.ResponseWriter, r *http.Request, p *Provi
 
 	if resp.StatusCode >= 400 {
 		errBody := readResponseBody(resp.Body, "upstream error")
+		writeBugReport(ctx, resp.StatusCode, errBody, "upstream error (Responses→Anthropic path)")
 		writeJSON(w, resp.StatusCode, map[string]interface{}{
 			"error": map[string]interface{}{"type": "api_error", "message": extractUpstreamError(errBody)},
 		})

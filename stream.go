@@ -65,6 +65,7 @@ func newSSEScanner(r io.Reader) *bufio.Scanner {
 
 // forwardUpstream forwards a request body to an upstream endpoint and streams the response back.
 func forwardUpstream(w http.ResponseWriter, r *http.Request, url string, apiKey string, body []byte, extraHeaders map[string]string) {
+	setOutbound(r.Context(), "", url, body) // body is the rewritten inbound request; model left blank
 	req, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewReader(body))
 	if err != nil {
 		writeProxyError(w, r, err)

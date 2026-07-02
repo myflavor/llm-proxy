@@ -26,6 +26,7 @@ type ServerConfig struct {
 	Port           string `yaml:"port"`            // listen port, default "5000"
 	APIKey         string `yaml:"api_key"`
 	TimeoutMinutes int    `yaml:"timeout_minutes"` // HTTP client timeout in minutes, default 10
+	BugReport      bool   `yaml:"bug_report"`      // write bugreports/ on upstream >=400 (also LLM_PROXY_BUG_REPORT=1)
 }
 
 // ModelEntry is a single model definition in the config.
@@ -147,6 +148,8 @@ func loadConfig(path string) error {
 		timeoutMinutes = 10 // default 10 minutes
 	}
 	httpClient = &http.Client{Timeout: time.Duration(timeoutMinutes) * time.Minute}
+
+	bugReportEnabled = cfg.Server.BugReport || os.Getenv("LLM_PROXY_BUG_REPORT") == "1"
 
 	return nil
 }

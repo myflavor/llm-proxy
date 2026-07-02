@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -101,6 +102,26 @@ func logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: 200, headerWritten: false}
 
+		// Build a request context for bug reporting: a unique request ID plus the
+		// original inbound body. Tee the body so handlers still read it normally.
+		rc := &requestContext{
+			ID:        newRequestID(),
+			StartTime: start,
+			Method:    r.Method,
+			Path:      urlPath(r.URL.Path),
+		}
+		if r.Body != nil {
+			buf, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err != nil {
+				log.Printf("[bugreport] read inbound body err: %v", err)
+			} else {
+				rc.ClientBody = buf
+				r.Body = io.NopCloser(bytes.NewReader(buf))
+			}
+		}
+		r = r.WithContext(withRequestContext(r.Context(), rc))
+
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
@@ -139,6 +160,13 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeProxyError(w http.ResponseWriter, r *http.Request, err error) {
+	// Transport / request-construction failure: record a bug report (status 0)
+	// since this is an upstream-unreachable or proxy-internal failure worth
+	// diagnosing. The outbound URL/body/model are stashed on the requestContext
+	// by the handler before building req2.
+	if rc := requestContextFrom(r.Context()); rc != nil {
+		writeBugReport(r.Context(), 0, nil, "proxy error: "+err.Error())
+	}
 	status := http.StatusBadGateway
 	if r.Context().Err() != nil {
 		status = 499
