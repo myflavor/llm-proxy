@@ -298,9 +298,9 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		clamped := clampEffortForChatCompletions(ir.Thinking.Effort)
 		oa["reasoning_effort"] = clamped
 		if clamped != ir.Thinking.Effort {
-			log.Printf("[effort→] reasoning_effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+			log.Printf("  [effort→] reasoning_effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
 		} else {
-			log.Printf("[effort→] reasoning_effort=%s", clamped)
+			log.Printf("  [effort→] reasoning_effort=%s", clamped)
 		}
 	}
 
@@ -619,9 +619,9 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 			req.Thinking = &anthropicThinking{Type: "adaptive", Display: display}
 			req.OutputConfig = &anthropicOutputCfg{Effort: clamped}
 			if clamped != ir.Thinking.Effort {
-				log.Printf("[effort→] output_config.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+				log.Printf("  [effort→] output_config.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
 			} else {
-				log.Printf("[effort→] output_config.effort=%s", clamped)
+				log.Printf("  [effort→] output_config.effort=%s", clamped)
 			}
 		} else if ir.Thinking.BudgetTokens > 0 {
 			// 旧格式：enabled + budget_tokens
@@ -1228,9 +1228,9 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 		}
 		req["reasoning"] = reasoning
 		if clamped != ir.Thinking.Effort {
-			log.Printf("[effort→] reasoning.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
+			log.Printf("  [effort→] reasoning.effort=%s (clamped from %s)", clamped, ir.Thinking.Effort)
 		} else {
-			log.Printf("[effort→] reasoning.effort=%s", clamped)
+			log.Printf("  [effort→] reasoning.effort=%s", clamped)
 		}
 	}
 

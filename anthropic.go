@@ -37,7 +37,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		log.Printf("[effort] %s: %s → %s/%s", req.Model, req.OutputConfig.Effort, p.Type, p.Name)
+		log.Printf("  [effort] %s: %s → %s/%s", req.Model, req.OutputConfig.Effort, p.Type, p.Name)
 	}
 
 	switch p.Type {
