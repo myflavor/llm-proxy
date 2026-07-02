@@ -36,7 +36,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		// effort logged in convert.go (combined with actual value sent upstream)
+		// effort logged in convert.go
 	}
 
 	switch p.Type {

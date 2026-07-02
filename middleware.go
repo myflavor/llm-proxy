@@ -197,6 +197,16 @@ func extractUpstreamError(body []byte) string {
 
 func readRequestBody(r *http.Request) ([]byte, error) {
 	const maxBody = 32 * 1024 * 1024
+
+	// If the middleware already read the body for bugreport, reuse it and
+	// avoid a second read of r.Body.
+	if rc := requestContextFrom(r.Context()); rc != nil && len(rc.ClientBody) > 0 {
+		if len(rc.ClientBody) > maxBody {
+			return nil, fmt.Errorf("request body exceeds %d bytes", maxBody)
+		}
+		return rc.ClientBody, nil
+	}
+
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil {
 		return nil, err
