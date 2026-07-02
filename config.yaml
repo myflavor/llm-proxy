@@ -1,6 +1,6 @@
 server:
-  port: "5000"
-  api_key: "sk-xin"
+  port: 5000
+  api_key: sk-xin
   timeout_minutes: 10  # HTTP client timeout in minutes (default: 10)
   bug_report: true     # write bugreports/ on upstream errors (or env LLM_PROXY_BUG_REPORT=1)
 
