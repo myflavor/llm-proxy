@@ -28,6 +28,7 @@ type requestContext struct {
 	OutboundURL  string // upstream URL the proxy is calling
 	OutboundBody []byte // converted request body sent upstream
 	Model        string
+	BugReportID  string // set by saveBugReport if a report was written
 }
 
 func newRequestID() string {
@@ -103,7 +104,9 @@ func writeBugReport(ctx context.Context, status int, upstreamErr []byte, note st
 	}
 
 	report := buildBugReport(rc, status, upstreamErr, note)
-	saveBugReport(report)
+	if saveBugReport(report) {
+		rc.BugReportID = report.RequestID
+	}
 }
 
 // buildBugReport assembles a BugReport from the request context.
@@ -123,28 +126,26 @@ func buildBugReport(rc *requestContext, status int, upstreamErr []byte, note str
 	}
 }
 
-// saveBugReport writes a BugReport to bugreports/ with a unique filename
-// (requestID + nanosecond timestamp) so repeated failures never overwrite.
-func saveBugReport(report BugReport) {
+// saveBugReport writes a BugReport to bugreports/ with a unique UUID filename.
+// Returns true on success.
+func saveBugReport(report BugReport) bool {
 	dir := "bugreports"
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("[bugreport] mkdir %s failed: %v", dir, err)
-		return
+		return false
 	}
 
-	fname := report.RequestID + ".json"
-	fpath := filepath.Join(dir, fname)
-
+	fpath := filepath.Join(dir, report.RequestID+".json")
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		log.Printf("[bugreport] marshal failed: %v", err)
-		return
+		return false
 	}
 	if err := os.WriteFile(fpath, data, 0644); err != nil {
 		log.Printf("[bugreport] write %s failed: %v", fpath, err)
-		return
+		return false
 	}
-	log.Printf("[bugreport] %s %d", report.RequestID, report.UpstreamStatus)
+	return true
 }
 
 // asJSONRaw returns b as a json.RawMessage if valid JSON, else wraps as JSON
