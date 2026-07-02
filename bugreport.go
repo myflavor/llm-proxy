@@ -125,7 +125,7 @@ func saveBugReport(report BugReport) {
 		return
 	}
 
-	fname := fmt.Sprintf("bug-%s-%d.json", report.RequestID, time.Now().UnixNano())
+	fname := fmt.Sprintf("bug-%s.json", report.RequestID)
 	fpath := filepath.Join(dir, fname)
 
 	data, err := json.MarshalIndent(report, "", "  ")
