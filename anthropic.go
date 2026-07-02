@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 )
 
@@ -37,7 +36,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		log.Printf("  [effort] %s: %s → %s/%s", req.Model, req.OutputConfig.Effort, p.Type, p.Name)
+		// effort logged in convert.go (combined with actual value sent upstream)
 	}
 
 	switch p.Type {
