@@ -137,8 +137,7 @@ func saveBugReport(report BugReport) {
 		log.Printf("[bugreport] write %s failed: %v", fpath, err)
 		return
 	}
-	log.Printf("[bugreport] wrote %s (req=%s model=%s upstream=%d)",
-		fpath, report.RequestID, report.Model, report.UpstreamStatus)
+	log.Printf("[bugreport] %s %d", fname, report.UpstreamStatus)
 }
 
 // asJSONRaw returns b as a json.RawMessage if valid JSON, else wraps as JSON
