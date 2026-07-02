@@ -102,6 +102,8 @@ func logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: 200, headerWritten: false}
 
+		log.Printf("%s %s", r.Method, urlPath(r.URL.Path))
+
 		// Build a request context for bug reporting: a unique request ID plus the
 		// original inbound body. Tee the body so handlers still read it normally.
 		rc := &requestContext{
@@ -131,12 +133,12 @@ func logMiddleware(next http.Handler) http.Handler {
 					rw.status = 500
 				}
 			}
+			log.Printf("  → %d %s", rw.status, time.Since(start).Round(time.Millisecond))
 			if rc.Report != nil {
 				if fname := saveBugReport(rc.Report); fname != "" {
-					log.Printf("[bugreport] %s", fname)
+					log.Printf("  [bugreport] %s", fname)
 				}
 			}
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
 		}()
 
 		next.ServeHTTP(rw, r)
