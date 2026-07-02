@@ -131,12 +131,12 @@ func logMiddleware(next http.Handler) http.Handler {
 					rw.status = 500
 				}
 			}
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
 			if rc.Report != nil {
 				if fname := saveBugReport(rc.Report); fname != "" {
 					log.Printf("[bugreport] %s", fname)
 				}
 			}
+			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start).Round(time.Millisecond))
 		}()
 
 		next.ServeHTTP(rw, r)
