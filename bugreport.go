@@ -2,21 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"time"
 )
 
 // bugReportEnabled writes bugreports/ on upstream errors. Toggle via config
 // `server.bug_report: true` or env var LLM_PROXY_BUG_REPORT=1.
 var bugReportEnabled bool
-
-// requestIDSeq is a per-process counter for unique, sortable request IDs.
-var requestIDSeq uint64
 
 type requestCtxKey struct{}
 
@@ -33,8 +31,17 @@ type requestContext struct {
 }
 
 func newRequestID() string {
-	seq := atomic.AddUint64(&requestIDSeq, 1)
-	return fmt.Sprintf("%x-%x", time.Now().UnixNano()/int64(time.Millisecond), seq)
+	var uuid [16]byte
+	rand.Read(uuid[:])
+	uuid[6] = (uuid[6] & 0x0f) | 0x40 // version 4
+	uuid[8] = (uuid[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		hex.EncodeToString(uuid[:4]),
+		hex.EncodeToString(uuid[4:6]),
+		hex.EncodeToString(uuid[6:8]),
+		hex.EncodeToString(uuid[8:10]),
+		hex.EncodeToString(uuid[10:]),
+	)
 }
 
 func withRequestContext(ctx context.Context, rc *requestContext) context.Context {
@@ -125,7 +132,7 @@ func saveBugReport(report BugReport) {
 		return
 	}
 
-	fname := fmt.Sprintf("bug-%s.json", report.RequestID)
+	fname := report.RequestID + ".json"
 	fpath := filepath.Join(dir, fname)
 
 	data, err := json.MarshalIndent(report, "", "  ")
@@ -137,7 +144,7 @@ func saveBugReport(report BugReport) {
 		log.Printf("[bugreport] write %s failed: %v", fpath, err)
 		return
 	}
-	log.Printf("[bugreport] %s %d", fname, report.UpstreamStatus)
+	log.Printf("[bugreport] %s %d", report.RequestID, report.UpstreamStatus)
 }
 
 // asJSONRaw returns b as a json.RawMessage if valid JSON, else wraps as JSON
