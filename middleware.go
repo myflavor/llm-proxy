@@ -181,15 +181,18 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeProxyError(w http.ResponseWriter, r *http.Request, err error) {
+	// If the client canceled the request (context canceled), this is not a
+	// proxy/upstream bug — skip the bug report and return 499.
+	ctxErr := r.Context().Err()
 	// Transport / request-construction failure: record a bug report (status 0)
 	// since this is an upstream-unreachable or proxy-internal failure worth
 	// diagnosing. The outbound URL/body/model are stashed on the requestContext
 	// by the handler before building req2.
-	if rc := requestContextFrom(r.Context()); rc != nil {
+	if rc := requestContextFrom(r.Context()); rc != nil && ctxErr == nil {
 		writeBugReport(r.Context(), 0, nil, "proxy error: "+err.Error())
 	}
 	status := http.StatusBadGateway
-	if r.Context().Err() != nil {
+	if ctxErr != nil {
 		status = 499
 	}
 	writeJSON(w, status, map[string]interface{}{
