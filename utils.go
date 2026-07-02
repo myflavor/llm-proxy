@@ -253,11 +253,11 @@ func randomHex(n int) string {
 }
 
 // ID generation helpers - standardized ID formats and lengths
-func newMessageID() string          { return "msg_" + randomHex(12) }    // 28 chars (Anthropic standard)
-func newResponseID() string         { return "resp_" + randomHex(12) }   // 29 chars
-func newFunctionCallID() string     { return "fc_" + randomHex(12) }     // 27 chars
-func newReasoningID() string        { return "rs_" + randomHex(12) }     // 27 chars
-func newChatCompletionID() string   { return "chatcmpl-" + randomHex(12) } // 33 chars
+func newMessageID() string        { return "msg_" + randomHex(12) }      // 28 chars (Anthropic standard)
+func newResponseID() string       { return "resp_" + randomHex(12) }     // 29 chars
+func newFunctionCallID() string   { return "fc_" + randomHex(12) }       // 27 chars
+func newReasoningID() string      { return "rs_" + randomHex(12) }       // 27 chars
+func newChatCompletionID() string { return "chatcmpl-" + randomHex(12) } // 33 chars
 
 // --- Token estimation ---
 

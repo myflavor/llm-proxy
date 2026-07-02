@@ -65,7 +65,7 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 			cbType, _ := cb["type"].(string)
 			if cbType == "tool_use" {
 				idx, _ := event["index"].(float64)
-			 blockIdx := int(idx)
+				blockIdx := int(idx)
 				toolIdx := nextToolIdx
 				nextToolIdx++
 				toolBlocks[fmt.Sprintf("%d", blockIdx)] = toolIdx
@@ -97,7 +97,7 @@ func translateAnthropicToOpenAIStream(ctx context.Context, upstream io.Reader, w
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{"reasoning_content": thinking}, nil)
 			case "input_json_delta":
 				idx, _ := event["index"].(float64)
-			 blockIdx := int(idx)
+				blockIdx := int(idx)
 				toolIdx := toolBlocks[fmt.Sprintf("%d", blockIdx)]
 				partialJSON, _ := delta["partial_json"].(string)
 				emitOpenAIChunk(w, flusher, chunkID, model, map[string]interface{}{

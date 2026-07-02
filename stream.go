@@ -153,7 +153,7 @@ func translateStream(ctx context.Context, upstream io.Reader, w io.Writer, flush
 			return err
 		}
 		if err := emitSSE(w, flusher, "message_delta", map[string]interface{}{
-			"type": "message_delta",
+			"type":  "message_delta",
 			"delta": map[string]interface{}{"stop_reason": stopReason, "stop_sequence": nil},
 			"usage": map[string]int{"output_tokens": outputTokens},
 		}); err != nil {

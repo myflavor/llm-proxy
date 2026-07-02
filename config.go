@@ -23,7 +23,7 @@ type Config struct {
 
 // ServerConfig holds server-level settings.
 type ServerConfig struct {
-	Port           string `yaml:"port"`            // listen port, default "5000"
+	Port           string `yaml:"port"` // listen port, default "5000"
 	APIKey         string `yaml:"api_key"`
 	TimeoutMinutes int    `yaml:"timeout_minutes"` // HTTP client timeout in minutes, default 10
 	BugReport      bool   `yaml:"bug_report"`      // write bugreports/ on upstream >=400 (also LLM_PROXY_BUG_REPORT=1)
@@ -31,9 +31,9 @@ type ServerConfig struct {
 
 // ModelEntry is a single model definition in the config.
 type ModelEntry struct {
-	Name        string                 `yaml:"name"`         // 客户端使用的模型名
-	Provider    string                 `yaml:"provider"`     // openai / anthropic / responses
-	Model       string                 `yaml:"model"`        // 上游模型名
+	Name        string                 `yaml:"name"`     // 客户端使用的模型名
+	Provider    string                 `yaml:"provider"` // openai / anthropic / responses
+	Model       string                 `yaml:"model"`    // 上游模型名
 	APIKey      string                 `yaml:"api_key"`
 	BaseURL     string                 `yaml:"base_url"`
 	DropParams  bool                   `yaml:"drop_params"`  // 丢弃上游不支持的参数
@@ -51,13 +51,13 @@ const (
 
 // Provider is a resolved upstream endpoint.
 type Provider struct {
-	Name         string                 // 上游模型名
-	Type         ProviderType           // openai / anthropic / responses
+	Name         string       // 上游模型名
+	Type         ProviderType // openai / anthropic / responses
 	APIKey       string
-	BaseURL      string                 // base URL
-	ChatURL      string                 // full chat completions URL
-	MessagesURL  string                 // full messages URL (for anthropic)
-	ResponsesURL string                 // full responses URL
+	BaseURL      string // base URL
+	ChatURL      string // full chat completions URL
+	MessagesURL  string // full messages URL (for anthropic)
+	ResponsesURL string // full responses URL
 	DropParams   bool
 	ExtraParams  map[string]interface{} // 注入到上游请求体的额外参数
 	ModelName    string                 // 客户端使用的模型名

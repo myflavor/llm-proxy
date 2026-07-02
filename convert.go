@@ -237,7 +237,7 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 					contentParts = append(contentParts, map[string]interface{}{"type": "text", "text": b.Text})
 				case "image":
 					contentParts = append(contentParts, map[string]interface{}{
-						"type": "image_url",
+						"type":      "image_url",
 						"image_url": map[string]interface{}{"url": b.ImageURL},
 					})
 				}
@@ -286,7 +286,7 @@ func irToChatCompletions(ir *IRRequest) map[string]interface{} {
 		case "specific":
 			if ir.ToolChoice.Name != "" {
 				oa["tool_choice"] = map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": ir.ToolChoice.Name},
 				}
 			}
@@ -645,15 +645,15 @@ func irToAnthropicRequest(ir *IRRequest) *anthropicMsgReq {
 
 func chatCompletionsToIRRequest(body []byte) (*IRRequest, error) {
 	var oa struct {
-		Model       string                   `json:"model"`
-		Messages    []map[string]interface{} `json:"messages"`
-		MaxTokens           int     `json:"max_tokens"`
-		MaxCompletionTokens int     `json:"max_completion_tokens"`
-		Temperature         *float64 `json:"temperature,omitempty"`
-		TopP                *float64 `json:"top_p,omitempty"`
-		Stop        []string                 `json:"stop,omitempty"`
-		Stream      bool                     `json:"stream,omitempty"`
-		Tools       []struct {
+		Model               string                   `json:"model"`
+		Messages            []map[string]interface{} `json:"messages"`
+		MaxTokens           int                      `json:"max_tokens"`
+		MaxCompletionTokens int                      `json:"max_completion_tokens"`
+		Temperature         *float64                 `json:"temperature,omitempty"`
+		TopP                *float64                 `json:"top_p,omitempty"`
+		Stop                []string                 `json:"stop,omitempty"`
+		Stream              bool                     `json:"stream,omitempty"`
+		Tools               []struct {
 			Type     string `json:"type"`
 			Function struct {
 				Name        string      `json:"name"`
@@ -1110,7 +1110,7 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 		if m.Role == "tool" {
 			// tool result → function_call_output
 			input = append(input, map[string]interface{}{
-				"type":   "function_call_output",
+				"type":    "function_call_output",
 				"call_id": m.ToolCallID,
 				"output":  extractText(m.Content),
 			})
@@ -1212,7 +1212,7 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 		case "specific":
 			if ir.ToolChoice.Name != "" {
 				req["tool_choice"] = map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": ir.ToolChoice.Name},
 				}
 			}
@@ -1239,11 +1239,11 @@ func irToResponsesRequest(ir *IRRequest) map[string]interface{} {
 
 func irToResponses(ir *IRResponse) map[string]interface{} {
 	resp := map[string]interface{}{
-		"id":          ir.ID,
-		"object":      "response",
-		"created_at":  time.Now().Unix(),
-		"model":       ir.Model,
-		"status":      "completed",
+		"id":         ir.ID,
+		"object":     "response",
+		"created_at": time.Now().Unix(),
+		"model":      ir.Model,
+		"status":     "completed",
 	}
 
 	var output []interface{}
@@ -1281,8 +1281,8 @@ func irToResponses(ir *IRResponse) map[string]interface{} {
 			})
 		case "text":
 			messageContent = append(messageContent, map[string]interface{}{
-				"type": "output_text",
-				"text": b.Text,
+				"type":        "output_text",
+				"text":        b.Text,
 				"annotations": []interface{}{},
 			})
 		case "tool_use":

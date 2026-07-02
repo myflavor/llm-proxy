@@ -69,17 +69,17 @@ func setOutbound(ctx context.Context, model, url string, body []byte) {
 
 // BugReport is the on-disk JSON structure.
 type BugReport struct {
-	RequestID      string          `json:"request_id"`
-	Timestamp      string          `json:"timestamp"`
-	Method         string          `json:"method"`
-	Path           string          `json:"path"`
-	Model          string          `json:"model"`
-	UpstreamURL    string          `json:"upstream_url"`
-	UpstreamStatus int             `json:"upstream_status"`
-	Note           string          `json:"note,omitempty"`
-	ClientRequest  json.RawMessage `json:"client_request,omitempty"`
+	RequestID       string          `json:"request_id"`
+	Timestamp       string          `json:"timestamp"`
+	Method          string          `json:"method"`
+	Path            string          `json:"path"`
+	Model           string          `json:"model"`
+	UpstreamURL     string          `json:"upstream_url"`
+	UpstreamStatus  int             `json:"upstream_status"`
+	Note            string          `json:"note,omitempty"`
+	ClientRequest   json.RawMessage `json:"client_request,omitempty"`
 	OutboundRequest json.RawMessage `json:"outbound_request,omitempty"`
-	UpstreamError  json.RawMessage `json:"upstream_error,omitempty"`
+	UpstreamError   json.RawMessage `json:"upstream_error,omitempty"`
 }
 
 // writeBugReport builds a BugReport from the request context and stores it on

@@ -9,10 +9,10 @@ import (
 var (
 	providersByModel = map[string]*Provider{} // model_name → Provider
 	providerList     []*Provider
-	serverAPIKey     string // empty = no auth required
-	serverPort       string // listen port, default "5000"
-	startedAt        = time.Now().Unix()     // fixed timestamp for model listing
-	httpClient       *http.Client            // initialized with configured timeout
+	serverAPIKey     string              // empty = no auth required
+	serverPort       string              // listen port, default "5000"
+	startedAt        = time.Now().Unix() // fixed timestamp for model listing
+	httpClient       *http.Client        // initialized with configured timeout
 )
 
 // getProvider looks up a provider by model name.

@@ -185,4 +185,3 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "unsupported provider type")
 	}
 }
-

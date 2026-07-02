@@ -17,29 +17,29 @@ import (
 // --- 请求 ---
 
 type responsesReq struct {
-	Model              string            `json:"model"`
-	Input              interface{}       `json:"input"` // string or []responsesInputItem
-	Instructions       string            `json:"instructions,omitempty"`
-	Tools              []responsesTool   `json:"tools,omitempty"`
-	Stream             bool              `json:"stream,omitempty"`
-	Text               *responsesTextCfg `json:"text,omitempty"`
+	Model              string                 `json:"model"`
+	Input              interface{}            `json:"input"` // string or []responsesInputItem
+	Instructions       string                 `json:"instructions,omitempty"`
+	Tools              []responsesTool        `json:"tools,omitempty"`
+	Stream             bool                   `json:"stream,omitempty"`
+	Text               *responsesTextCfg      `json:"text,omitempty"`
 	Reasoning          *responsesReasoningCfg `json:"reasoning,omitempty"`
-	MaxOutputTokens    int               `json:"max_output_tokens,omitempty"`
-	Temperature        *float64          `json:"temperature,omitempty"`
-	TopP               *float64          `json:"top_p,omitempty"`
-	PreviousResponseID string            `json:"previous_response_id,omitempty"`
-	Include            []string          `json:"include,omitempty"`
-	Store              *bool             `json:"store,omitempty"`
-	ToolChoice         interface{}       `json:"tool_choice,omitempty"`
+	MaxOutputTokens    int                    `json:"max_output_tokens,omitempty"`
+	Temperature        *float64               `json:"temperature,omitempty"`
+	TopP               *float64               `json:"top_p,omitempty"`
+	PreviousResponseID string                 `json:"previous_response_id,omitempty"`
+	Include            []string               `json:"include,omitempty"`
+	Store              *bool                  `json:"store,omitempty"`
+	ToolChoice         interface{}            `json:"tool_choice,omitempty"`
 }
 
 type responsesInputItem struct {
 	Type      string      `json:"type"` // "message", "function_call", "function_call_output"
 	Role      string      `json:"role,omitempty"`
-	Content   interface{} `json:"content,omitempty"` // string or []responsesContentPart
-	CallID    string      `json:"call_id,omitempty"` // for function_call and function_call_output
-	Output    string      `json:"output,omitempty"`  // for function_call_output
-	Name      string      `json:"name,omitempty"`     // for function_call
+	Content   interface{} `json:"content,omitempty"`   // string or []responsesContentPart
+	CallID    string      `json:"call_id,omitempty"`   // for function_call and function_call_output
+	Output    string      `json:"output,omitempty"`    // for function_call_output
+	Name      string      `json:"name,omitempty"`      // for function_call
 	Arguments string      `json:"arguments,omitempty"` // for function_call (JSON string)
 }
 
@@ -69,27 +69,27 @@ type responsesReasoningCfg struct {
 // --- 响应 ---
 
 type responsesResp struct {
-	ID         string              `json:"id"`
-	Object     string              `json:"object"` // "response"
-	CreatedAt  int64               `json:"created_at"`
-	Model      string              `json:"model"`
-	Output     []responsesOutputItem `json:"output"`
-	Usage      *responsesUsage     `json:"usage,omitempty"`
-	Status     string              `json:"status"` // "completed", "failed", etc.
-	Error      *responsesError     `json:"error,omitempty"`
+	ID        string                `json:"id"`
+	Object    string                `json:"object"` // "response"
+	CreatedAt int64                 `json:"created_at"`
+	Model     string                `json:"model"`
+	Output    []responsesOutputItem `json:"output"`
+	Usage     *responsesUsage       `json:"usage,omitempty"`
+	Status    string                `json:"status"` // "completed", "failed", etc.
+	Error     *responsesError       `json:"error,omitempty"`
 }
 
 type responsesOutputItem struct {
-	Type      string                   `json:"type"` // "message", "reasoning", "function_call"
-	ID        string                   `json:"id,omitempty"`
-	Role      string                   `json:"role,omitempty"`       // for message
-	Content   []responsesOutputContent `json:"content,omitempty"`    // for message
+	Type    string                   `json:"type"` // "message", "reasoning", "function_call"
+	ID      string                   `json:"id,omitempty"`
+	Role    string                   `json:"role,omitempty"`    // for message
+	Content []responsesOutputContent `json:"content,omitempty"` // for message
 	// function_call fields
-	CallID    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments string                   `json:"arguments,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 	// reasoning fields
-	Summary   []interface{}            `json:"summary,omitempty"`
+	Summary []interface{} `json:"summary,omitempty"`
 }
 
 type responsesOutputContent struct {
@@ -109,7 +109,6 @@ type responsesError struct {
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
 }
-
 
 // ============================================================
 // handleResponses — POST /v1/responses
@@ -395,7 +394,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"type": "reasoning", "id": reasoningID,
 				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasoningText}},
 				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoningText}},
-				"status": "completed",
+				"status":  "completed",
 			},
 		}); err != nil {
 			return err
@@ -423,7 +422,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"item": map[string]interface{}{
 					"type": "message", "id": msgID, "role": "assistant",
 					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": textContent.String(), "annotations": []interface{}{}}},
-					"status": "completed",
+					"status":  "completed",
 				},
 			}); err != nil {
 				return err
@@ -493,7 +492,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": "completed",
-					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
+					"output": buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -649,7 +648,7 @@ func translateChatCompletionsToResponsesStream(ctx context.Context, upstream io.
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": status,
-					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
+					"output": buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -729,7 +728,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				"type": "reasoning", "id": reasoningID,
 				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasoningContent.String()}},
 				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoningContent.String()}},
-				"status": "completed",
+				"status":  "completed",
 			},
 		}); err != nil {
 			return err
@@ -757,7 +756,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				"item": map[string]interface{}{
 					"type": "message", "id": msgID, "role": "assistant",
 					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": textContent.String(), "annotations": []interface{}{}}},
-					"status": "completed",
+					"status":  "completed",
 				},
 			}); err != nil {
 				return err
@@ -977,7 +976,7 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 				"response": map[string]interface{}{
 					"id": respID, "object": "response", "created_at": time.Now().Unix(),
 					"model": model, "status": status,
-					"output":   buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
+					"output": buildOutput(reasoningContent.String(), textContent.String(), completedToolCalls, reasoningID, msgID),
 					"usage": map[string]interface{}{
 						"input_tokens": inputTokens, "output_tokens": outputTokens,
 						"total_tokens": inputTokens + outputTokens,
@@ -988,7 +987,6 @@ func translateAnthropicToResponsesStream(ctx context.Context, upstream io.Reader
 	}
 	return scanner.Err()
 }
-
 
 // ============================================================
 // Responses 响应 → IR 转换
@@ -1283,7 +1281,7 @@ func translateResponsesToAnthropicStream(ctx context.Context, upstream io.Reader
 				stopReason = "max_tokens"
 			}
 			if err := emit("message_delta", map[string]interface{}{
-				"type": "message_delta",
+				"type":  "message_delta",
 				"delta": map[string]interface{}{"stop_reason": stopReason, "stop_sequence": nil},
 				"usage": map[string]interface{}{"output_tokens": outputTokens},
 			}); err != nil {

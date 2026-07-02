@@ -81,13 +81,3 @@ type IRUsage struct {
 	InputTokens  int
 	OutputTokens int
 }
-
-// --- IR Stream Event ---
-
-type IRStreamEvent struct {
-	Type       string // message_start / content_delta / message_stop
-	Index      int    // content block index (for content_delta)
-	Delta      *IRContentBlock
-	StopReason string
-	Usage      *IRUsage
-}
