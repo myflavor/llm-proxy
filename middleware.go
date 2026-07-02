@@ -136,7 +136,7 @@ func logMiddleware(next http.Handler) http.Handler {
 		}
 		r = r.WithContext(withRequestContext(r.Context(), rc))
 
-		log.Printf("%s %s size=%s", r.Method, rc.Path, formatBytes(int64(len(rc.ClientBody))))
+		log.Printf("%s %s (%s)", r.Method, rc.Path, formatBytes(int64(len(rc.ClientBody))))
 
 		defer func() {
 			if rec := recover(); rec != nil {
